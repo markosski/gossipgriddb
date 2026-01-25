@@ -41,6 +41,7 @@ crossbeam-channel = { version = "0.4" }
 fastcache = { version = "0.1.7" }
 dashmap = "6.1.0"
 futures = "0.3.31"
+mlua = { version = "0.9", features = ["serialize", "lua54", "vendored"] }
 
 [dev-dependencies]
 console-subscriber = "0.5.0"

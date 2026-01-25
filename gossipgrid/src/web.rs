@@ -71,6 +71,16 @@ pub struct ItemCreateUpdate {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComputeRequest {
+    pub script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComputeResponse {
+    pub result: serde_json::Value,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ItemOpsResponseEnvelope {
     pub success: Option<Vec<ItemResponse>>,
@@ -209,6 +219,9 @@ fn partition_key_from_path(req_path: &FullPath) -> Option<PartitionKey> {
         (Some("items"), Some(partition_id)) if !partition_id.is_empty() => {
             Some(PartitionKey(partition_id.to_string()))
         }
+        (Some("compute"), Some(partition_id)) if !partition_id.is_empty() => {
+            Some(PartitionKey(partition_id.to_string()))
+        }
         _ => None,
     }
 }
@@ -228,10 +241,12 @@ async fn try_route_request(
             )
             .partition_key
         }
-        (&Method::GET, None) | (&Method::DELETE, None) => match partition_key_from_path(req_path) {
-            Some(partition_key) => partition_key,
-            None => return Err(warp::reject::custom(WebError::RequestNotRoutable)),
-        },
+        (&Method::GET, None) | (&Method::DELETE, None) | (&Method::POST, None) => {
+            match partition_key_from_path(req_path) {
+                Some(partition_key) => partition_key,
+                None => return Err(warp::reject::custom(WebError::RequestNotRoutable)),
+            }
+        }
         _ => return Err(warp::reject::custom(WebError::RequestNotRoutable)),
     };
 
@@ -738,6 +753,90 @@ async fn handle_remove_item_without_range(
     handle_remove_item(store_key, "".to_string(), req_path, memory, env).await
 }
 
+async fn handle_compute_items(
+    partition_id: String,
+    req_path: FullPath,
+    compute_req: ComputeRequest,
+    memory: Arc<RwLock<NodeState>>,
+    env: Arc<Env>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let partition_key = PartitionKey(partition_id);
+
+    let routing_result = decide_routing(&partition_key, &Method::POST, memory.clone()).await;
+    let routing = match routing_result {
+        Ok(decision) => decision,
+        Err(envelope) => return Ok(warp::reply::json(&envelope)),
+    };
+
+    match routing {
+        RouteDecision::Remote { target } => {
+            match route_request::<ComputeRequest, ItemGenericResponseEnvelope>(
+                env.get_http_client(),
+                &target,
+                req_path.as_str(),
+                &Method::POST,
+                Some(&compute_req),
+            )
+            .await
+            {
+                Ok(remote_response) => Ok(warp::reply::json(&remote_response)),
+                Err(err) => Ok(warp::reply::json(&ItemGenericResponseEnvelope {
+                    success: None,
+                    error: Some(format!("Routing error: {err}")),
+                })),
+            }
+        }
+        RouteDecision::Local => {
+            let memory = memory.read().await;
+
+            match &*memory {
+                node::NodeState::Joined(node) => {
+                    let limit = 1000; // Default limit for compute
+                    let storage_key = StorageKey::new(partition_key, None);
+                    let store_ref = env.get_store();
+
+                    let item_entries = match node.get_items(limit, &storage_key, store_ref).await {
+                        Ok(item_entry) => item_entry,
+                        Err(e) => {
+                            let response = ItemGenericResponseEnvelope {
+                                success: None,
+                                error: Some(format!("Item retrieval error for compute: {e}")),
+                            };
+                            return Ok(warp::reply::json(&response));
+                        }
+                    };
+
+                    match crate::compute::execute_lua(item_entries, &compute_req.script) {
+                        Ok(result) => {
+                            let response = ItemGenericResponseEnvelope {
+                                success: Some(
+                                    vec![("result".to_string(), result)].into_iter().collect(),
+                                ),
+                                error: None,
+                            };
+                            Ok(warp::reply::json(&response))
+                        }
+                        Err(e) => {
+                            let response = ItemGenericResponseEnvelope {
+                                success: None,
+                                error: Some(format!("Lua execution error: {e}")),
+                            };
+                            Ok(warp::reply::json(&response))
+                        }
+                    }
+                }
+                _ => {
+                    let response = ItemGenericResponseEnvelope {
+                        success: None,
+                        error: Some(CANNOT_PERFORM_ACTION_IN_CURRENT_STATE.to_string()),
+                    };
+                    Ok(warp::reply::json(&response))
+                }
+            }
+        }
+    }
+}
+
 pub async fn web_server_task(
     listen_on_address: NodeAddress,
     memory: Arc<RwLock<NodeState>>,
@@ -788,6 +887,14 @@ pub async fn web_server_task(
         .and(with_env(env.clone()))
         .and_then(handle_remove_item_without_range);
 
+    let compute_items = warp::path!("compute" / String)
+        .and(warp::post())
+        .and(warp::path::full())
+        .and(warp::body::json())
+        .and(with_memory(memory.clone()))
+        .and(with_env(env.clone()))
+        .and_then(handle_compute_items);
+
     let address = listen_on_address
         .as_str()
         .to_string()
@@ -800,7 +907,8 @@ pub async fn web_server_task(
             .or(get_items)
             .or(get_items_count)
             .or(remove_item_with_range)
-            .or(remove_item),
+            .or(remove_item)
+            .or(compute_items),
     )
     .run(address);
 

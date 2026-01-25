@@ -23,7 +23,7 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 - [ ] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
 - [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads.
 - [ ] **WAL Compaction**: Reclaim disk space automatically, improved data recovery performance.
-- [ ] **Compute**: Execute compute tasks on items within partition key range.
+- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations.
 
 ## 🏗️ Architecture
 
@@ -83,8 +83,8 @@ curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/items -d '
 
 **Store items with range key:**
 ```bash
-curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/items -d '{"partition_key": "user_123", "range_key": "transaction_10", "message": "JSON payload"}'
-curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/items -d '{"partition_key": "user_123", "range_key": "transaction_11", "message": "JSON payload"}'
+curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/items -d '{"partition_key": "user_123", "range_key": "transaction_10", "message": "{\"amount\": 100}"}'
+curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/items -d '{"partition_key": "user_123", "range_key": "transaction_11", "message": "{\"amount\": 50}"}'
 ```
 
 **Retrieve all items by partition key:**
@@ -95,6 +95,13 @@ curl -XGET http://127.0.0.1:3001/items/user_123
 **Retrieve a specific item with range key:**
 ```bash
 curl -XGET http://127.0.0.1:3001/items/user_123/transaction_10
+```
+
+**Execute compute task (e.g. sum values):**
+```bash
+curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/compute/user_123 -d '{
+  "script": "local sum = 0; for i, item in ipairs(items) do sum = sum + item.data.amount end; return sum"
+}'
 ```
 
 ## 🧪 Testing
