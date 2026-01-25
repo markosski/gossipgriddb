@@ -13,14 +13,14 @@ async fn test_compute_sum() {
 
     // Insert some items with JSON data
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "calc", "range_key": "1", "message": "{\"v\": 10}"}"#)
         .send()
         .await
         .unwrap();
 
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "calc", "range_key": "2", "message": "{\"v\": 20}"}"#)
         .send()
         .await
@@ -29,13 +29,13 @@ async fn test_compute_sum() {
     // Short sleep to allow sync to propagate if needed (though we mostly test local compute)
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Execute compute
+    // Execute compute with lazy iteration pattern
     let compute_req = r#"{
-        "script": "local sum = 0; for i, item in ipairs(items) do sum = sum + item.data.v end; return sum"
+        "script": "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum"
     }"#;
 
     let res = client
-        .post(format!("http://localhost:{}/compute/calc", port1))
+        .post(format!("http://localhost:{port1}/compute/calc"))
         .header("Content-Type", "application/json")
         .body(compute_req)
         .send()

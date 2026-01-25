@@ -60,7 +60,7 @@ pub async fn start_test_cluster(
     let env1: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(&format!("{}/wal_1", test_uuid), true)
+            WalLocalFile::new(&format!("{test_uuid}/wal_1"), true)
                 .await
                 .unwrap(),
         ),
@@ -70,7 +70,7 @@ pub async fn start_test_cluster(
     let env2: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(&format!("{}/wal_2", test_uuid), true)
+            WalLocalFile::new(&format!("{test_uuid}/wal_2"), true)
                 .await
                 .unwrap(),
         ),
@@ -80,7 +80,7 @@ pub async fn start_test_cluster(
     let env3: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(&format!("{}/wal_3", test_uuid), true)
+            WalLocalFile::new(&format!("{test_uuid}/wal_3"), true)
                 .await
                 .unwrap(),
         ),
@@ -154,7 +154,7 @@ pub async fn start_test_cluster(
 
         let joined_1 = if let NodeState::Joined(this_node) = &*node_mem_1 {
             let health = this_node.cluster.get_cluster_health();
-            info!("Node 1 cluster health: {:?}", health);
+            info!("Node 1 cluster health: {health:?}");
             health == ClusterHealth::Healthy
         } else {
             false
@@ -162,7 +162,7 @@ pub async fn start_test_cluster(
 
         let joined_2 = if let NodeState::Joined(this_node) = &*node_mem_2 {
             let health = this_node.cluster.get_cluster_health();
-            info!("Node 2 cluster health: {:?}", health);
+            info!("Node 2 cluster health: {health:?}");
             health == ClusterHealth::Healthy
         } else {
             false
@@ -170,7 +170,7 @@ pub async fn start_test_cluster(
 
         let joined_3 = if let NodeState::Joined(this_node) = &*node_mem_3 {
             let health = this_node.cluster.get_cluster_health();
-            info!("Node 3 cluster health: {:?}", health);
+            info!("Node 3 cluster health: {health:?}");
             health == ClusterHealth::Healthy
         } else {
             false

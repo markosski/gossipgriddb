@@ -806,7 +806,8 @@ async fn handle_compute_items(
                         }
                     };
 
-                    match crate::compute::execute_lua(item_entries, &compute_req.script) {
+                    match crate::compute::execute_lua(item_entries.into_iter(), &compute_req.script)
+                    {
                         Ok(result) => {
                             let response = ItemGenericResponseEnvelope {
                                 success: Some(

@@ -100,7 +100,7 @@ curl -XGET http://127.0.0.1:3001/items/user_123/transaction_10
 **Execute compute task (e.g. sum values):**
 ```bash
 curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/compute/user_123 -d '{
-  "script": "local sum = 0; for i, item in ipairs(items) do sum = sum + item.data.amount end; return sum"
+  "script": "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.amount; item = next_item(); end; return sum"
 }'
 ```
 

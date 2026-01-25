@@ -16,7 +16,7 @@ async fn test_publish_and_retrieve_items() {
 
     let client = reqwest::Client::new();
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "123", "range_key": "456", "message": "foo1"}"#)
         .send()
         .await
@@ -24,7 +24,7 @@ async fn test_publish_and_retrieve_items() {
 
     // Submitting another item to ensure we are fetching the correct one
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "123", "range_key": "457", "message": "foo1"}"#)
         .send()
         .await
@@ -34,7 +34,7 @@ async fn test_publish_and_retrieve_items() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let res = client
-        .get(format!("http://localhost:{}/items/123/456", port2))
+        .get(format!("http://localhost:{port2}/items/123/456"))
         .send()
         .await
         .unwrap();
@@ -85,14 +85,14 @@ async fn test_publish_and_retrieve_many_item() {
 
     let client = reqwest::Client::new();
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "123", "range_key": "456", "message": "foo1"}"#)
         .send()
         .await
         .unwrap();
 
     let _ = client
-        .post(format!("http://localhost:{}/items", port2))
+        .post(format!("http://localhost:{port2}/items"))
         .body(r#"{"partition_key": "123", "range_key": "457", "message": "foo2"}"#)
         .send()
         .await
@@ -103,7 +103,7 @@ async fn test_publish_and_retrieve_many_item() {
 
     // Get several itmes
     let res = client
-        .get(format!("http://localhost:{}/items/123", port1))
+        .get(format!("http://localhost:{port1}/items/123"))
         .send()
         .await
         .unwrap();
@@ -117,7 +117,7 @@ async fn test_publish_and_retrieve_many_item() {
 
     // Get items limited to 1
     let res = client
-        .get(format!("http://localhost:{}/items/123?limit=1", port2))
+        .get(format!("http://localhost:{port2}/items/123?limit=1"))
         .send()
         .await
         .unwrap();
@@ -143,7 +143,7 @@ async fn test_publish_and_delete_item() {
 
     let client = reqwest::Client::new();
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "123", "message": "foo1"}"#)
         .send()
         .await
@@ -153,7 +153,7 @@ async fn test_publish_and_delete_item() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let res = client
-        .get(format!("http://localhost:{}/items/123", port2))
+        .get(format!("http://localhost:{port2}/items/123"))
         .send()
         .await
         .unwrap();
@@ -172,13 +172,13 @@ async fn test_publish_and_delete_item() {
     assert!(item_msg.contains("foo1"));
 
     let _ = client
-        .delete(format!("http://localhost:{}/items/123", port2))
+        .delete(format!("http://localhost:{port2}/items/123"))
         .send()
         .await
         .unwrap();
 
     let res = client
-        .get(format!("http://localhost:{}/items/123", port1))
+        .get(format!("http://localhost:{port1}/items/123"))
         .send()
         .await
         .unwrap();
@@ -214,7 +214,7 @@ async fn test_publish_and_upsert_item() {
 
     let client = reqwest::Client::new();
     let _ = client
-        .post(format!("http://localhost:{}/items", port1))
+        .post(format!("http://localhost:{port1}/items"))
         .body(r#"{"partition_key": "123", "message": "foo1"}"#)
         .send()
         .await
@@ -224,7 +224,7 @@ async fn test_publish_and_upsert_item() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let res = client
-        .get(format!("http://localhost:{}/items/123", port2))
+        .get(format!("http://localhost:{port2}/items/123"))
         .send()
         .await
         .unwrap();
@@ -242,7 +242,7 @@ async fn test_publish_and_upsert_item() {
     assert!(item_msg.contains("foo1"));
 
     let _ = client
-        .post(format!("http://localhost:{}/items", port2))
+        .post(format!("http://localhost:{port2}/items"))
         .body(r#"{"partition_key": "123", "message": "foo2"}"#)
         .send()
         .await
@@ -252,7 +252,7 @@ async fn test_publish_and_upsert_item() {
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let res = client
-        .get(format!("http://localhost:{}/items/123", port3))
+        .get(format!("http://localhost:{port3}/items/123"))
         .send()
         .await
         .unwrap();
