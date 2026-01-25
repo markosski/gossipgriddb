@@ -1,0 +1,15 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# Local data
+gossipgrid_data/
+*.log
+
+# IDEs
+.idea/
+.vscode/
+
+# Node environment
+node_modules/
+package-lock.json

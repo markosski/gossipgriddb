@@ -1,0 +1,17 @@
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+console-subscriber = "0.5.0"
+gossipgrid = { path = "../../gossipgrid" }
+env_logger = "*"
+clap = { version = "4.5.*", features = ["derive"] }
+tokio = { version = "1.48.0", features = ["full"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }

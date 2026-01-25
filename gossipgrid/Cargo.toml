@@ -1,0 +1,46 @@
+[package]
+name = "gossipgrid"
+version = "0.1.0"
+edition = "2024"
+description = "A distributed Key/Value database with partition-aware compute"
+license = "MIT OR Apache-2.0"
+keywords = ["distributed", "database", "kv", "gossip", "rust"]
+repository = "https://github.com/markosski/gossipgrid"
+
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+doc = true
+doctest = true
+
+[features]
+default = ["memory-store"]
+memory-store = []
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["net", "sync", "time", "rt-multi-thread", "macros", "signal"] }
+warp = { version = "0.4.2", features = ["server"] }
+twox-hash = { version = "2.1.*" }
+uuid = { version = "1.16.*", features = ["v4"] }
+rand = "0.9.*"
+log = { version="0.4.*", features=["kv", "release_max_level_warn"] }
+env_logger = { version="0.11.*", features = ["unstable-kv"]}
+names = { version = "0.14.*", default-features = false }
+serde = { version = "1.0.*", features = ["derive"] }
+serde_json = { version = "1.0.*" }
+bincode =  { version = "2.0.*", features = ["serde"] }
+stdext = "0.3"
+async-trait = { version = "0.1.*" }
+reqwest = { version = "0.12", features = ["json"] }
+thiserror = { version = "2.0.*" }
+base64 = { version = "0.22.1" }
+laminar = { version = "0.4" }
+crossbeam-channel = { version = "0.4" }
+fastcache = { version = "0.1.7" }
+dashmap = "6.1.0"
+futures = "0.3.31"
+
+[dev-dependencies]
+console-subscriber = "0.5.0"
