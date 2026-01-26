@@ -1,8 +1,17 @@
 use crate::item::ItemEntry;
-use mlua::{Lua, serde::LuaSerdeExt};
+use mlua::{Lua, LuaOptions, StdLib, serde::LuaSerdeExt};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+/// Maximum script size in bytes
+const MAX_SCRIPT_SIZE: usize = 16 * 1024;
+
+/// Instruction count limit before timeout (prevents infinite loops)
+const INSTRUCTION_LIMIT: u32 = 1_000_000;
+
+/// Memory limit in bytes
+const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// Converts an ItemEntry to a Lua-compatible HashMap
 fn item_entry_to_lua_value(entry: &ItemEntry) -> HashMap<String, Value> {
@@ -31,8 +40,15 @@ fn item_entry_to_lua_value(entry: &ItemEntry) -> HashMap<String, Value> {
 
 /// Execute a Lua script with lazy iteration over items.
 ///
-/// Items are pulled one at a time via `next_item()` function exposed to Lua,
-/// avoiding upfront collection and reducing memory copying.
+/// # Security
+///
+/// The Lua environment is sandboxed with the following protections:
+/// - Only safe standard libraries: `string`, `table`, `math`, `base` (subset)
+/// - No access to: `io`, `os`, `debug`, `package`, `ffi`
+/// - Dangerous base functions removed: `dofile`, `loadfile`, `load`, `require`
+/// - Instruction limit to prevent infinite loops
+/// - Memory limit to prevent OOM attacks
+/// - Script size limit
 ///
 /// # Lua Usage
 /// ```lua
@@ -46,10 +62,47 @@ pub fn execute_lua<I>(items: I, script: &str) -> Result<Value, String>
 where
     I: Iterator<Item = ItemEntry> + 'static,
 {
-    let lua = Lua::new();
+    // Validate script size
+    if script.len() > MAX_SCRIPT_SIZE {
+        return Err(format!(
+            "Script too large: {} bytes (max: {} bytes)",
+            script.len(),
+            MAX_SCRIPT_SIZE
+        ));
+    }
+
+    // Create sandboxed Lua environment with only safe libraries
+    // Excludes: IO, OS, DEBUG, PACKAGE, FFI (dangerous capabilities)
+    // Note: Base functions (print, pairs, ipairs, type, etc.) are always available
+    let lua = Lua::new_with(
+        StdLib::STRING | StdLib::TABLE | StdLib::MATH,
+        LuaOptions::default(),
+    )
+    .map_err(|e| format!("Failed to create Lua sandbox: {e}"))?;
+
+    // Set memory limit
+    lua.set_memory_limit(MEMORY_LIMIT)
+        .map_err(|e| format!("Failed to set memory limit: {e}"))?;
+
+    // Set instruction limit hook to prevent infinite loops
+    lua.set_hook(
+        mlua::HookTriggers::new().every_nth_instruction(INSTRUCTION_LIMIT),
+        |_lua, _debug| {
+            Err(mlua::Error::RuntimeError(
+                "Script execution exceeded instruction limit".into(),
+            ))
+        },
+    );
+
+    // Remove dangerous base functions that could be used for code injection
+    let globals = lua.globals();
+    for dangerous_fn in ["dofile", "loadfile", "load", "require", "collectgarbage"] {
+        globals
+            .set(dangerous_fn, mlua::Value::Nil)
+            .map_err(|e| format!("Failed to remove {dangerous_fn}: {e}"))?;
+    }
 
     // Wrap iterator in RefCell for interior mutability
-    // The closure is the sole owner, so no Rc needed
     let items = RefCell::new(items);
 
     // Create next_item() function that Lua can call to pull items lazily
@@ -66,7 +119,6 @@ where
         })
         .map_err(|e| e.to_string())?;
 
-    let globals = lua.globals();
     globals
         .set("next_item", next_item)
         .map_err(|e| e.to_string())?;
@@ -185,5 +237,65 @@ mod tests {
         let result = execute_lua(items.into_iter(), script).unwrap();
         let keys: Vec<String> = serde_json::from_value(result).unwrap();
         assert_eq!(keys.len(), 2);
+    }
+
+    // Security tests
+
+    #[test]
+    fn test_sandbox_blocks_os_execute() {
+        let items: Vec<ItemEntry> = vec![];
+        let script = r#"os.execute("echo pwned")"#;
+
+        let result = execute_lua(items.into_iter(), script);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("nil"));
+    }
+
+    #[test]
+    fn test_sandbox_blocks_io_open() {
+        let items: Vec<ItemEntry> = vec![];
+        let script = r#"io.open("/etc/passwd")"#;
+
+        let result = execute_lua(items.into_iter(), script);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sandbox_blocks_loadfile() {
+        let items: Vec<ItemEntry> = vec![];
+        let script = r#"loadfile("/tmp/evil.lua")"#;
+
+        let result = execute_lua(items.into_iter(), script);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sandbox_blocks_require() {
+        let items: Vec<ItemEntry> = vec![];
+        let script = r#"require("os")"#;
+
+        let result = execute_lua(items.into_iter(), script);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_script_size_limit() {
+        let items: Vec<ItemEntry> = vec![];
+        // Create a script larger than MAX_SCRIPT_SIZE
+        let script = "x".repeat(MAX_SCRIPT_SIZE + 1);
+
+        let result = execute_lua(items.into_iter(), &script);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Script too large"));
+    }
+
+    #[test]
+    fn test_infinite_loop_protection() {
+        let items: Vec<ItemEntry> = vec![];
+        let script = r#"while true do end"#;
+
+        let result = execute_lua(items.into_iter(), script);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("instruction limit"));
     }
 }
