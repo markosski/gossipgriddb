@@ -578,7 +578,17 @@ async fn handle_get_items(
                 let registry = env.get_function_registry();
                 match registry.get(fn_name) {
                     Some(func) => {
-                        match crate::compute::execute_lua(item_entries.into_iter(), &func.script) {
+                        let start = std::time::Instant::now();
+                        let item_count = item_entries.len();
+                        let compute_result =
+                            crate::compute::execute_lua(item_entries.into_iter(), &func.script);
+                        debug!(
+                            "Lua execution: {:?} for {} items",
+                            start.elapsed(),
+                            item_count
+                        );
+
+                        match compute_result {
                             Ok(result) => {
                                 let response = ItemGenericResponseEnvelope {
                                     success: Some(
