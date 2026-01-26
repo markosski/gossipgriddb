@@ -97,11 +97,19 @@ curl -XGET http://127.0.0.1:3001/items/user_123
 curl -XGET http://127.0.0.1:3001/items/user_123/transaction_10
 ```
 
-**Execute compute task (e.g. sum values):**
+**Register and execute a compute function:**
 ```bash
-curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/compute/user_123 -d '{
+# Register a function
+curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/functions -d '{
+  "name": "sum_amounts",
   "script": "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.amount; item = next_item(); end; return sum"
 }'
+
+# Execute function on items
+curl -XGET "http://127.0.0.1:3001/items/user_123?fn=sum_amounts"
+
+# List registered functions
+curl -XGET http://127.0.0.1:3001/functions
 ```
 
 ## 🧪 Testing

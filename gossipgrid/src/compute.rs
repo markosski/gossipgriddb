@@ -3,6 +3,7 @@ use mlua::{Lua, LuaOptions, StdLib, serde::LuaSerdeExt};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// Maximum script size in bytes
 const MAX_SCRIPT_SIZE: usize = 16 * 1024;
@@ -12,6 +13,48 @@ const INSTRUCTION_LIMIT: u32 = 1_000_000;
 
 /// Memory limit in bytes
 const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
+
+#[derive(Error, Debug)]
+pub enum ComputeError {
+    #[error("Error initializing interpreter: {0}")]
+    InterpreterError(String),
+    #[error("Error executing script: {0}")]
+    ScriptError(String),
+}
+
+// fn create_lua() -> Result<Lua, ComputeError> {
+//     let lua = Lua::new_with(
+//         StdLib::STRING | StdLib::TABLE | StdLib::MATH,
+//         LuaOptions::default(),
+//     )
+//     .map_err(|e| ComputeError::InterpreterError(e.to_string()))?;
+
+//     // Set memory limit
+//     lua.set_memory_limit(MEMORY_LIMIT)
+//         .map_err(|e| ComputeError::InterpreterError(e.to_string()))?;
+
+//     // Set instruction limit hook to prevent infinite loops
+//     {
+//         lua.set_hook(
+//             mlua::HookTriggers::new().every_nth_instruction(INSTRUCTION_LIMIT),
+//             |_lua, _debug| {
+//                 Err(mlua::Error::RuntimeError(
+//                     "Script execution exceeded instruction limit".into(),
+//                 ))
+//             },
+//         );
+
+//         // Remove dangerous base functions that could be used for code injection
+//         let globals = lua.globals();
+//         for dangerous_fn in ["dofile", "loadfile", "load", "require", "collectgarbage"] {
+//             globals
+//                 .set(dangerous_fn, mlua::Value::Nil)
+//                 .map_err(|e| ComputeError::InterpreterError(e.to_string()))?;
+//         }
+//     }
+
+//     Ok(lua)
+// }
 
 /// Converts an ItemEntry to a Lua-compatible HashMap
 fn item_entry_to_lua_value(entry: &ItemEntry) -> HashMap<String, Value> {

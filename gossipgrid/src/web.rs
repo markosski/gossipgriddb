@@ -81,6 +81,17 @@ pub struct ComputeResponse {
     pub result: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterFunctionRequest {
+    pub name: String,
+    pub script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionListResponse {
+    pub functions: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ItemOpsResponseEnvelope {
     pub success: Option<Vec<ItemResponse>>,
@@ -536,16 +547,18 @@ async fn handle_get_items(
             Some(RangeKey(range_key))
         },
     );
-    // let storage_key: StorageKey = store_key.parse().unwrap();
     let storage_key_string = storage_key.to_string();
     let memory = memory.read().await;
 
     match &*memory {
         node::NodeState::Joined(node) => {
+            // Check for function execution via 'fn' query param
+            let function_name = params.get("fn");
+
             let limit = params
                 .get("limit")
-                .map(|v| v.parse::<usize>().unwrap_or(10))
-                .unwrap_or(10);
+                .map(|v| v.parse::<usize>().unwrap_or(1000))
+                .unwrap_or(if function_name.is_some() { 1000 } else { 10 });
 
             let store_ref = env.get_store();
 
@@ -560,6 +573,41 @@ async fn handle_get_items(
                 }
             };
 
+            // If 'fn' param is present, execute the registered function
+            if let Some(fn_name) = function_name {
+                let registry = env.get_function_registry();
+                match registry.get(fn_name) {
+                    Some(func) => {
+                        match crate::compute::execute_lua(item_entries.into_iter(), &func.script) {
+                            Ok(result) => {
+                                let response = ItemGenericResponseEnvelope {
+                                    success: Some(
+                                        vec![("result".to_string(), result)].into_iter().collect(),
+                                    ),
+                                    error: None,
+                                };
+                                return Ok(warp::reply::json(&response));
+                            }
+                            Err(e) => {
+                                let response = ItemGenericResponseEnvelope {
+                                    success: None,
+                                    error: Some(format!("Function execution error: {e}")),
+                                };
+                                return Ok(warp::reply::json(&response));
+                            }
+                        }
+                    }
+                    None => {
+                        let response = ItemGenericResponseEnvelope {
+                            success: None,
+                            error: Some(format!("Function not found: {fn_name}")),
+                        };
+                        return Ok(warp::reply::json(&response));
+                    }
+                }
+            }
+
+            // Normal item retrieval
             if !item_entries.is_empty() {
                 let response = ItemOpsResponseEnvelope {
                     success: Some(
@@ -753,6 +801,84 @@ async fn handle_remove_item_without_range(
     handle_remove_item(store_key, "".to_string(), req_path, memory, env).await
 }
 
+// ====================== Function Registry Handlers ======================
+
+async fn handle_register_function(
+    request: RegisterFunctionRequest,
+    env: Arc<Env>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let registry = env.get_function_registry();
+
+    // Validate the script by trying to compile it
+    // We don't execute, just check for syntax errors
+    match registry.register(request.name.clone(), request.script) {
+        Ok(()) => {
+            let response = ItemGenericResponseEnvelope {
+                success: Some(
+                    vec![(
+                        "registered".to_string(),
+                        serde_json::Value::String(request.name),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                error: None,
+            };
+            Ok(warp::reply::json(&response))
+        }
+        Err(e) => {
+            let response = ItemGenericResponseEnvelope {
+                success: None,
+                error: Some(format!("Failed to register function: {e}")),
+            };
+            Ok(warp::reply::json(&response))
+        }
+    }
+}
+
+async fn handle_list_functions(env: Arc<Env>) -> Result<impl warp::Reply, warp::Rejection> {
+    let registry = env.get_function_registry();
+    let functions = registry.list();
+
+    let response = FunctionListResponse { functions };
+    Ok(warp::reply::json(&response))
+}
+
+async fn handle_delete_function(
+    name: String,
+    env: Arc<Env>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let registry = env.get_function_registry();
+
+    match registry.remove(&name) {
+        Ok(true) => {
+            let response = ItemGenericResponseEnvelope {
+                success: Some(
+                    vec![("deleted".to_string(), serde_json::Value::String(name))]
+                        .into_iter()
+                        .collect(),
+                ),
+                error: None,
+            };
+            Ok(warp::reply::json(&response))
+        }
+        Ok(false) => {
+            let response = ItemGenericResponseEnvelope {
+                success: None,
+                error: Some(format!("Function not found: {name}")),
+            };
+            Ok(warp::reply::json(&response))
+        }
+        Err(e) => {
+            let response = ItemGenericResponseEnvelope {
+                success: None,
+                error: Some(format!("Failed to delete function: {e}")),
+            };
+            Ok(warp::reply::json(&response))
+        }
+    }
+}
+
 async fn handle_compute_items(
     partition_id: String,
     req_path: FullPath,
@@ -888,6 +1014,24 @@ pub async fn web_server_task(
         .and(with_env(env.clone()))
         .and_then(handle_remove_item_without_range);
 
+    // Function registry routes
+    let register_function = warp::path!("functions")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(with_env(env.clone()))
+        .and_then(handle_register_function);
+
+    let list_functions = warp::path!("functions")
+        .and(warp::get())
+        .and(with_env(env.clone()))
+        .and_then(handle_list_functions);
+
+    let delete_function = warp::path!("functions" / String)
+        .and(warp::delete())
+        .and(with_env(env.clone()))
+        .and_then(handle_delete_function);
+
+    // Keep compute endpoint for backward compatibility (deprecated)
     let compute_items = warp::path!("compute" / String)
         .and(warp::post())
         .and(warp::path::full())
@@ -909,6 +1053,9 @@ pub async fn web_server_task(
             .or(get_items_count)
             .or(remove_item_with_range)
             .or(remove_item)
+            .or(register_function)
+            .or(list_functions)
+            .or(delete_function)
             .or(compute_items),
     )
     .run(address);
