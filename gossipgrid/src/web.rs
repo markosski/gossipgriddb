@@ -581,7 +581,7 @@ async fn handle_get_items(
                         let start = std::time::Instant::now();
                         let item_count = item_entries.len();
                         let compute_result =
-                            crate::compute::execute_lua(item_entries.into_iter(), &func.script);
+                            crate::compute::execute_lua_async(item_entries, &func.script).await;
                         debug!(
                             "Lua execution: {:?} for {} items",
                             start.elapsed(),
@@ -942,7 +942,7 @@ async fn handle_compute_items(
                         }
                     };
 
-                    match crate::compute::execute_lua(item_entries.into_iter(), &compute_req.script)
+                    match crate::compute::execute_lua_async(item_entries, &compute_req.script).await
                     {
                         Ok(result) => {
                             let response = ItemGenericResponseEnvelope {

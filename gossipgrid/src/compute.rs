@@ -25,13 +25,13 @@ pub enum ComputeError {
 // Thread-local Lua VM for reuse
 // Each thread gets its own Lua VM that is reused across requests
 thread_local! {
+    // Using RefCell to allow setting Lua VM on first use per thread
     static LUA_VM: RefCell<Option<Lua>> = const { RefCell::new(None) };
 }
 
 /// Create a sandboxed Lua VM with security restrictions
 fn create_sandboxed_lua() -> Result<Lua, String> {
     // Create sandboxed Lua environment with only safe libraries
-    // Excludes: IO, OS, DEBUG, PACKAGE, FFI (dangerous capabilities)
     let lua = Lua::new_with(
         StdLib::STRING | StdLib::TABLE | StdLib::MATH,
         LuaOptions::default(),
@@ -82,7 +82,7 @@ where
         let result = f(lua);
 
         // Clean up globals after execution to prevent state leakage
-        // We only need to remove next_item since that's what we add
+        // We only need to remove next_item since that's what we set
         let _ = lua.globals().set("next_item", mlua::Value::Nil);
 
         result
@@ -99,7 +99,6 @@ fn item_entry_to_lua_value(entry: &ItemEntry) -> HashMap<String, Value> {
 
     // Try to parse message as JSON
     let message_json: Value = serde_json::from_slice(&entry.item.message).unwrap_or_else(|_| {
-        // If not JSON, represent as a raw string if it's UTF-8, else null
         match String::from_utf8(entry.item.message.clone()) {
             Ok(s) => Value::String(s),
             Err(_) => Value::Null,
@@ -153,10 +152,8 @@ where
     }
 
     with_lua_vm(|lua| {
-        // Wrap iterator in RefCell for interior mutability
         let items = RefCell::new(items);
 
-        // Create next_item() function that Lua can call to pull items lazily
         let next_item = lua
             .create_function(move |lua_ctx, ()| {
                 let mut iter = items.borrow_mut();
@@ -178,6 +175,16 @@ where
 
         lua.from_value::<Value>(result).map_err(|e| e.to_string())
     })
+}
+
+/// Async version of execute_lua that runs on the blocking thread pool.
+/// Use this from async contexts to avoid blocking Tokio workers.
+pub async fn execute_lua_async(items: Vec<ItemEntry>, script: &str) -> Result<Value, String> {
+    let script = script.to_string();
+
+    tokio::task::spawn_blocking(move || execute_lua(items.into_iter(), &script))
+        .await
+        .map_err(|e| format!("Blocking task panicked: {e}"))?
 }
 
 #[cfg(test)]

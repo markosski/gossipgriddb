@@ -2,7 +2,7 @@ use demo::cli;
 use gossipgrid::prelude::*;
 
 /// Demo CLI for GossipGrid
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), NodeError> {
     env_logger::init();
 

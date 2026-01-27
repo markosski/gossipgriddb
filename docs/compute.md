@@ -9,7 +9,7 @@ GossipGridDB supports server-side computation using Lua scripts that execute on 
 | 1,000 | ~2ms | **~2μs** |
 | 10,000 | ~20ms | **~2μs** |
 
-> **Planning Guidance**: At ~2μs per item, processing 100K items takes ~200ms. Consider partitioning data appropriately or using batch processing for very large datasets.
+> **Planning Guidance**: At ~2μs per item, processing 100K items takes ~200ms.
 
 ## API
 
