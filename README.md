@@ -114,4 +114,4 @@ cargo doc --no-deps --package gossipgrid --open
 ```
 
 ## 📄 License
-Licensed under either [MIT](LICENSE) or [Apache-2.0](http://www.apache.org/licenses/LICENSE-2.0).
+Licensed under [Apache-2.0](http://www.apache.org/licenses/LICENSE-2.0).
