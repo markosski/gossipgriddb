@@ -20,10 +20,10 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 - [x] **Rich Querying**: Support for partition and range keys.
 - [x] **Embeddable**: Easily integrate into your Rust applications.
 - [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided).
+- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations.
 - [ ] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
 - [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads.
 - [ ] **WAL Compaction**: Reclaim disk space automatically, improved data recovery performance.
-- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations.
 
 ## 🏗️ Architecture
 
