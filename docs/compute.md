@@ -11,15 +11,37 @@ GossipGridDB supports server-side computation using Lua scripts that execute on 
 
 > **Planning Guidance**: At ~2μs per item, processing 100K items takes ~200ms.
 
-## API
+## Providing Functions
 
-### Register a Function
+Functions are provided to the node at startup via a JSON configuration file using the `--functions` flag.
+
+### Configuration Format
+
+The configuration file is a JSON array of objects, where each object defines a named function:
+
+```json
+[
+  {
+    "name": "sum_amounts",
+    "script": "local sum = 0; local item = next_item(); while item ~= nil do if item.data and item.data.amount then sum = sum + item.data.amount end; item = next_item(); end; return sum"
+  }
+]
+```
+
+### Starting a Node with Functions
 
 ```bash
-curl -H "Content-Type: application/json" -XPOST http://127.0.0.1:3001/functions -d '{
-  "name": "sum_amounts",
-  "script": "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.amount; item = next_item(); end; return sum"
-}'
+gossipgrid start --functions functions.json
+```
+
+## API
+
+### List Registered Functions
+
+Returns a list of all functions loaded from the configuration file.
+
+```bash
+curl -XGET http://127.0.0.1:3001/functions
 ```
 
 ### Execute Function on Items
@@ -28,18 +50,6 @@ Add `?fn=<function_name>` to any GET request:
 
 ```bash
 curl -XGET "http://127.0.0.1:3001/items/user_123?fn=sum_amounts"
-```
-
-### List Registered Functions
-
-```bash
-curl -XGET http://127.0.0.1:3001/functions
-```
-
-### Delete a Function
-
-```bash
-curl -XDELETE http://127.0.0.1:3001/functions/sum_amounts
 ```
 
 ## Lua Script Pattern
