@@ -282,13 +282,13 @@ async fn try_route_request(
     match routing {
         RouteDecision::Remote { target } => {
             let mut url = req_path.as_str().to_string();
-            if let Some(params) = params {
-                if !params.is_empty() {
-                    let query_string = serde_urlencoded::to_string(params).unwrap_or_default();
-                    if !query_string.is_empty() {
-                        url.push('?');
-                        url.push_str(&query_string);
-                    }
+            if let Some(params) = params
+                && !params.is_empty()
+            {
+                let query_string = serde_urlencoded::to_string(params).unwrap_or_default();
+                if !query_string.is_empty() {
+                    url.push('?');
+                    url.push_str(&query_string);
                 }
             }
 
