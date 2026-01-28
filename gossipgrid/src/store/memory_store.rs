@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::cluster::PartitionId;
 use crate::item::{Item, ItemEntry, ItemStatus};
-use crate::store::{DataStoreError, PartitionKey, RangeKey, StorageKey, StoreEngine};
+use crate::store::{
+    DataStoreError, GetManyOptions, PartitionKey, RangeKey, StorageKey, StoreEngine,
+};
 
 pub struct InMemoryStore {
     item_partitions: DashMap<PartitionId, DashMap<PartitionKey, BTreeMap<Option<RangeKey>, Item>>>,
@@ -49,7 +51,7 @@ impl StoreEngine for InMemoryStore {
         &self,
         partition_id: &PartitionId,
         key: &StorageKey,
-        limit: usize,
+        options: GetManyOptions,
     ) -> Result<Vec<ItemEntry>, DataStoreError> {
         let maybe_partition = self.item_partitions.get(partition_id);
         let mut data: Vec<ItemEntry> = vec![];
@@ -60,11 +62,15 @@ impl StoreEngine for InMemoryStore {
         {
             let rk_map = rk_map_ref.value();
             for (rk, item) in rk_map.iter() {
-                if counter == limit {
+                if counter == options.limit {
                     break;
                 }
 
                 if item.status != ItemStatus::Active {
+                    continue;
+                }
+
+                if options.skip_null_rk && rk.is_none() {
                     continue;
                 }
 
@@ -330,12 +336,32 @@ mod tests {
 
         // 1. Get all for pk
         let sk_query = StorageKey::new(pk.clone(), None);
-        let items = store.get_many(&partition, &sk_query, 10).await.unwrap();
+        let items = store
+            .get_many(
+                &partition,
+                &sk_query,
+                GetManyOptions {
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(items.len(), 4);
 
         // 2. Get with range filter (e.g., contains "se")
         let sk_filter = StorageKey::new(pk.clone(), Some(RangeKey("se".to_string())));
-        let filtered_items = store.get_many(&partition, &sk_filter, 10).await.unwrap();
+        let filtered_items = store
+            .get_many(
+                &partition,
+                &sk_filter,
+                GetManyOptions {
+                    limit: 10,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
         // matches "settings" and "session"
         assert_eq!(filtered_items.len(), 2);
         let returned_rk: Vec<String> = filtered_items
@@ -346,7 +372,73 @@ mod tests {
         assert!(returned_rk.contains(&"session".to_string()));
 
         // 3. Limit
-        let limited_items = store.get_many(&partition, &sk_query, 2).await.unwrap();
+        let limited_items = store
+            .get_many(
+                &partition,
+                &sk_query,
+                GetManyOptions {
+                    limit: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(limited_items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_many_skip_null_rk() {
+        use super::*;
+        let store = InMemoryStore::default();
+        let partition = PartitionId(1);
+        let pk = PartitionKey("user_skip_test".to_string());
+
+        // Insert mix of items with and without range keys
+        let items_data = vec![
+            (None, "null_rk"),
+            (Some("rk1"), "rk1"),
+            (Some("rk2"), "rk2"),
+        ];
+
+        for (rk, val) in items_data {
+            let sk = StorageKey::new(pk.clone(), rk.map(|r| RangeKey(r.to_string())));
+            store
+                .insert(
+                    &partition,
+                    &sk,
+                    Item {
+                        message: val.as_bytes().to_vec(),
+                        status: ItemStatus::Active,
+                        hlc: HLC::new(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        // Test with skip_null_rk = true
+        let options = GetManyOptions {
+            skip_null_rk: true,
+            limit: 10,
+        };
+        let items = store
+            .get_many(&partition, &StorageKey::new(pk.clone(), None), options)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        for item in items {
+            assert!(item.storage_key.range_key.is_some());
+        }
+
+        // Test with skip_null_rk = false
+        let options_all = GetManyOptions {
+            skip_null_rk: false,
+            limit: 10,
+        };
+        let items_all = store
+            .get_many(&partition, &StorageKey::new(pk.clone(), None), options_all)
+            .await
+            .unwrap();
+        assert_eq!(items_all.len(), 3);
     }
 }

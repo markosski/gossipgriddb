@@ -585,9 +585,17 @@ async fn handle_get_items(
                 .map(|v| v.parse::<usize>().unwrap_or(1000))
                 .unwrap_or(if function_name.is_some() { 1000 } else { 10 });
 
+            let skip_null_rk = params
+                .get("skip_null_rk")
+                .map(|v| v.parse::<bool>().unwrap_or(false))
+                .unwrap_or(false);
+
             let store_ref = env.get_store();
 
-            let item_entries = match node.get_items(limit, &storage_key, store_ref).await {
+            let item_entries = match node
+                .get_items(limit, skip_null_rk, &storage_key, store_ref)
+                .await
+            {
                 Ok(item_entry) => item_entry,
                 Err(e) => {
                     let response = ItemOpsResponseEnvelope {
@@ -965,16 +973,17 @@ async fn handle_compute_items(
                     let storage_key = StorageKey::new(partition_key, None);
                     let store_ref = env.get_store();
 
-                    let item_entries = match node.get_items(limit, &storage_key, store_ref).await {
-                        Ok(item_entry) => item_entry,
-                        Err(e) => {
-                            let response = ItemGenericResponseEnvelope {
-                                success: None,
-                                error: Some(format!("Item retrieval error for compute: {e}")),
-                            };
-                            return Ok(warp::reply::json(&response));
-                        }
-                    };
+                    let item_entries =
+                        match node.get_items(limit, false, &storage_key, store_ref).await {
+                            Ok(item_entry) => item_entry,
+                            Err(e) => {
+                                let response = ItemGenericResponseEnvelope {
+                                    success: None,
+                                    error: Some(format!("Item retrieval error for compute: {e}")),
+                                };
+                                return Ok(warp::reply::json(&response));
+                            }
+                        };
 
                     match crate::compute::execute_lua_async(item_entries, &compute_req.script).await
                     {
