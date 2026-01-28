@@ -46,9 +46,9 @@ pub(crate) mod sync;
 #[doc(hidden)]
 pub mod wal;
 #[doc(hidden)]
-pub mod web;
-#[doc(hidden)]
 pub use wal::WalLocalFile;
+#[doc(hidden)]
+pub mod web;
 
 pub mod cluster;
 pub mod node;

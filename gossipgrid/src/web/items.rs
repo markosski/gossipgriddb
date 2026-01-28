@@ -13,13 +13,10 @@ use log::{error, info, warn};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::time::Duration;
-use warp::filters::path::FullPath;
-
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
-use warp::Filter;
+use warp::filters::path::FullPath;
 
 const CANNOT_PERFORM_ACTION_IN_CURRENT_STATE: &str =
     "Cannot perform action in current state, is cluster ready?";
@@ -71,21 +68,6 @@ pub struct ItemCreateUpdate {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComputeRequest {
-    pub script: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComputeResponse {
-    pub result: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FunctionListResponse {
-    pub functions: Vec<String>,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ItemOpsResponseEnvelope {
     pub success: Option<Vec<ItemResponse>>,
@@ -96,26 +78,6 @@ pub struct ItemOpsResponseEnvelope {
 pub struct ItemGenericResponseEnvelope {
     pub success: Option<HashMap<String, serde_json::Value>>,
     pub error: Option<String>,
-}
-
-// HTTP server implementation
-fn with_memory(
-    memory: Arc<RwLock<NodeState>>,
-) -> impl Filter<Extract = (Arc<RwLock<NodeState>>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || memory.clone())
-}
-
-fn with_env(
-    env: Arc<Env>,
-) -> impl Filter<Extract = (Arc<Env>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || env.clone())
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ProxyMethod {
-    Get,
-    Post,
-    Delete,
 }
 
 #[derive(Debug, Clone)]
@@ -403,7 +365,7 @@ async fn wait_for_sync(
     }
 }
 
-async fn handle_post_item(
+pub async fn handle_post_item(
     req_path: FullPath,
     item_submit: ItemCreateUpdate,
     memory: Arc<RwLock<NodeState>>,
@@ -521,7 +483,7 @@ async fn handle_post_item(
     }
 }
 
-async fn handle_get_items_without_range(
+pub async fn handle_get_items_without_range(
     store_key: String,
     req_path: FullPath,
     params: HashMap<String, String>,
@@ -531,7 +493,7 @@ async fn handle_get_items_without_range(
     handle_get_items(store_key, "".to_string(), req_path, params, memory, env).await
 }
 
-async fn handle_get_items(
+pub async fn handle_get_items(
     store_key: String,
     range_key: String,
     req_path: FullPath,
@@ -675,7 +637,7 @@ async fn handle_get_items(
     }
 }
 
-async fn handle_get_item_count(
+pub async fn handle_get_item_count(
     memory: Arc<RwLock<NodeState>>,
     env: Arc<Env>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
@@ -716,7 +678,7 @@ async fn handle_get_item_count(
     }
 }
 
-async fn handle_remove_item(
+pub async fn handle_remove_item(
     store_key: String,
     range_key: String,
     req_path: FullPath,
@@ -838,110 +800,11 @@ async fn handle_remove_item(
     }
 }
 
-async fn handle_remove_item_without_range(
+pub async fn handle_remove_item_without_range(
     store_key: String,
     req_path: FullPath,
     memory: Arc<RwLock<NodeState>>,
     env: Arc<Env>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     handle_remove_item(store_key, "".to_string(), req_path, memory, env).await
-}
-
-// ====================== Function Registry Handlers ======================
-
-async fn handle_list_functions(env: Arc<Env>) -> Result<impl warp::Reply, warp::Rejection> {
-    let registry = env.get_function_registry();
-    let functions = registry.list();
-
-    let response = FunctionListResponse { functions };
-    Ok(warp::reply::json(&response))
-}
-
-pub async fn web_server_task(
-    listen_on_address: NodeAddress,
-    memory: Arc<RwLock<NodeState>>,
-    env: Arc<Env>,
-    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-) {
-    let post_item = warp::path!("items")
-        .and(warp::post())
-        .and(warp::path::full())
-        .and(warp::body::json())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_post_item);
-
-    let get_items_count = warp::path!("items")
-        .and(warp::get())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_get_item_count);
-
-    let get_item = warp::path!("items" / String / String)
-        .and(warp::get())
-        .and(warp::path::full())
-        .and(warp::query::<HashMap<String, String>>())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_get_items);
-
-    let get_items = warp::path!("items" / String)
-        .and(warp::get())
-        .and(warp::path::full())
-        .and(warp::query::<HashMap<String, String>>())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_get_items_without_range);
-
-    let remove_item_with_range = warp::path!("items" / String / String)
-        .and(warp::delete())
-        .and(warp::path::full())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_remove_item);
-
-    let remove_item = warp::path!("items" / String)
-        .and(warp::delete())
-        .and(warp::path::full())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_remove_item_without_range);
-
-    // Function registry routes
-
-    let list_functions = warp::path!("functions")
-        .and(warp::get())
-        .and(with_env(env.clone()))
-        .and_then(handle_list_functions);
-
-    let address = listen_on_address
-        .as_str()
-        .to_string()
-        .parse::<SocketAddr>()
-        .expect("Failed to parse address for web server");
-
-    let server = warp::serve(
-        post_item
-            .or(get_item)
-            .or(get_items)
-            .or(get_items_count)
-            .or(remove_item_with_range)
-            .or(remove_item)
-            .or(list_functions),
-    )
-    .run(address);
-
-    tokio::select! {
-        _ = server => {},
-        _ = shutdown_rx.recv() => {
-            info!("Shutting down web server");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[tokio::test]
-    async fn simple_test() {}
 }
