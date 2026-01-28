@@ -81,6 +81,10 @@ async fn main() -> Result<(), NodeError> {
             // Build node using NodeBuilder
             let mut builder = NodeBuilder::new().address(&host)?.web_port(web_port);
 
+            if let Some(functions_file) = start_matches.get_one::<String>("functions") {
+                builder = builder.with_functions(functions_file.into());
+            }
+
             if ephemeral {
                 let size: u8 = start_matches
                     .get_one::<String>("size")
@@ -127,6 +131,10 @@ async fn main() -> Result<(), NodeError> {
 
             // Build node using NodeBuilder
             let mut builder = NodeBuilder::new().address(&host)?.web_port(web_port);
+
+            if let Some(functions_file) = sub_matches.get_one::<String>("functions") {
+                builder = builder.with_functions(functions_file.into());
+            }
 
             // Use join_ephemeral for ephemeral clusters, join_peer for persistent
             if ephemeral {

@@ -1,0 +1,1 @@
+[{"name": "sum_amounts", "script": "local sum = 0; local item = next_item(); while item ~= nil do if item.data and item.data.amount then sum = sum + item.data.amount end; item = next_item(); end; return sum"}]

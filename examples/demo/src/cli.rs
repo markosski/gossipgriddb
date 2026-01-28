@@ -114,6 +114,13 @@ pub fn node_cli() -> Command {
                         .long("web-port")
                         .value_name("WEB_PORT")
                         .default_value(WEB_PORT_DEFAULT),
+                )
+                .arg(
+                    clap::Arg::new("functions")
+                        .long("functions")
+                        .value_name("FILE_PATH")
+                        .help("Path to JSON file containing functions to register")
+                        .required(false),
                 ),
         )
         .subcommand(Command::new("list").about("List all clusters"))
@@ -161,6 +168,13 @@ pub fn node_cli() -> Command {
                         .long("web-port")
                         .value_name("WEB_PORT")
                         .default_value(WEB_PORT_DEFAULT),
+                )
+                .arg(
+                    clap::Arg::new("functions")
+                        .long("functions")
+                        .value_name("FILE_PATH")
+                        .help("Path to JSON file containing functions to register")
+                        .required(false),
                 ),
         )
 }

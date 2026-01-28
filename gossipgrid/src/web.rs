@@ -239,11 +239,12 @@ fn partition_key_from_path(req_path: &FullPath) -> Option<PartitionKey> {
 
 async fn try_route_request(
     req_path: &FullPath,
+    params: Option<&HashMap<String, String>>,
     method: Method,
     item_submit: Option<ItemCreateUpdate>,
     memory: Arc<RwLock<NodeState>>,
     env: Arc<Env>,
-) -> Result<Option<ItemOpsResponseEnvelope>, warp::Rejection> {
+) -> Result<Option<serde_json::Value>, warp::Rejection> {
     let partition_key = match (&method, &item_submit) {
         (&Method::POST, Some(item)) => {
             StorageKey::new(
@@ -276,7 +277,7 @@ async fn try_route_request(
 
     let routing = match routing_result {
         Ok(decision) => decision,
-        Err(response) => return Ok(Some(response)),
+        Err(response) => return Ok(Some(serde_json::to_value(response).unwrap())),
     };
 
     info!(
@@ -286,20 +287,34 @@ async fn try_route_request(
 
     match routing {
         RouteDecision::Remote { target } => {
-            match route_request::<ItemCreateUpdate, ItemOpsResponseEnvelope>(
+            let mut url = req_path.as_str().to_string();
+            if let Some(params) = params {
+                if !params.is_empty() {
+                    let query_string = serde_urlencoded::to_string(params).unwrap_or_default();
+                    if !query_string.is_empty() {
+                        url.push('?');
+                        url.push_str(&query_string);
+                    }
+                }
+            }
+
+            match route_request::<ItemCreateUpdate, serde_json::Value>(
                 env.get_http_client(),
                 &target,
-                req_path.as_str(),
+                &url,
                 &method,
                 item_submit.as_ref(),
             )
             .await
             {
                 Ok(remote_response) => Ok(Some(remote_response)),
-                Err(err) => Ok(Some(ItemOpsResponseEnvelope {
-                    success: None,
-                    error: Some(format!("Routing error: {err}")),
-                })),
+                Err(err) => {
+                    let err_resp = ItemGenericResponseEnvelope {
+                        success: None,
+                        error: Some(format!("Routing error: {err}")),
+                    };
+                    Ok(Some(serde_json::to_value(err_resp).unwrap()))
+                }
             }
         }
         RouteDecision::Local => Ok(None),
@@ -413,6 +428,7 @@ async fn handle_post_item(
 
     match try_route_request(
         &req_path,
+        None,
         Method::POST,
         Some(item_submit.clone()),
         memory.clone(),
@@ -529,7 +545,16 @@ async fn handle_get_items(
     memory: Arc<RwLock<NodeState>>,
     env: Arc<Env>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    match try_route_request(&req_path, Method::GET, None, memory.clone(), env.clone()).await {
+    match try_route_request(
+        &req_path,
+        Some(&params),
+        Method::GET,
+        None,
+        memory.clone(),
+        env.clone(),
+    )
+    .await
+    {
         Ok(Some(response_envelope)) => {
             return Ok(warp::reply::json(&response_envelope));
         }
@@ -707,7 +732,16 @@ async fn handle_remove_item(
         }
     };
 
-    match try_route_request(&req_path, Method::DELETE, None, memory.clone(), env.clone()).await {
+    match try_route_request(
+        &req_path,
+        None,
+        Method::DELETE,
+        None,
+        memory.clone(),
+        env.clone(),
+    )
+    .await
+    {
         Ok(Some(response_envelope)) => {
             return Ok(warp::reply::with_status(
                 warp::reply::json(&response_envelope),
