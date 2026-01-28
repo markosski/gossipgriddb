@@ -4,13 +4,15 @@ use gossipgrid::{
 };
 use log::info;
 
+use crate::helpers::start_test_cluster;
+
 mod helpers;
 
 #[tokio::test]
 async fn test_node1_drops() {
     let _ = env_logger::try_init();
 
-    let nodes = helpers::start_test_cluster(6, 2).await;
+    let nodes = start_test_cluster(6, 2).await;
     // wait for cluster to stabilize
     tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use gossipgrid::WalLocalFile;
 use gossipgrid::event_bus::EventBus;
 use gossipgrid::node::{NodeAddress, NodeError, NodeRuntime};
