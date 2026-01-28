@@ -61,7 +61,7 @@ impl StoreEngine for InMemoryStore {
             && let Some(rk_map_ref) = pk_map.get(&key.partition_key)
         {
             let rk_map = rk_map_ref.value();
-            for (rk, item) in rk_map.iter() {
+            for (rk, item) in rk_map.iter().rev() {
                 if counter == options.limit {
                     break;
                 }
@@ -370,6 +370,9 @@ mod tests {
             .collect();
         assert!(returned_rk.contains(&"settings".to_string()));
         assert!(returned_rk.contains(&"session".to_string()));
+        // verify order: session, settings
+        assert_eq!(returned_rk[0], "settings".to_string());
+        assert_eq!(returned_rk[1], "session".to_string());
 
         // 3. Limit
         let limited_items = store
@@ -440,5 +443,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(items_all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_many_order() {
+        use super::*;
+        let store = InMemoryStore::default();
+        let partition = PartitionId(1);
+        let pk = PartitionKey("test_pk".to_string());
+
+        // Insert items 01 to 05
+        for i in 1..=5 {
+            let rk = RangeKey(format!("{i:02}"));
+            let sk = StorageKey::new(pk.clone(), Some(rk));
+            store
+                .insert(
+                    &partition,
+                    &sk,
+                    Item {
+                        message: vec![i as u8],
+                        status: ItemStatus::Active,
+                        hlc: HLC::new(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let options = GetManyOptions {
+            limit: 3,
+            ..Default::default()
+        };
+        let items = store
+            .get_many(&partition, &StorageKey::new(pk.clone(), None), options)
+            .await
+            .unwrap();
+
+        assert_eq!(items.len(), 3);
+        // Verify descending order
+        assert_eq!(items[0].storage_key.range_key.as_ref().unwrap().0, "05");
+        assert_eq!(items[1].storage_key.range_key.as_ref().unwrap().0, "04");
+        assert_eq!(items[2].storage_key.range_key.as_ref().unwrap().0, "03");
     }
 }

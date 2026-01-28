@@ -118,7 +118,8 @@ pub trait StoreEngine: Send + Sync {
         key: &StorageKey,
     ) -> Result<Option<ItemEntry>, DataStoreError>;
 
-    /// Options for get_many operation
+    /// Options for get_many operation.
+    /// Returns items sorted in descending order by range key within a partition.
     async fn get_many(
         &self,
         partition: &PartitionId,
