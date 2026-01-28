@@ -5,7 +5,7 @@ mod helpers;
 async fn test_compute_sum_with_registered_function() {
     let _ = env_logger::try_init();
 
-    let nodes = helpers::start_test_cluster(3, 3).await;
+    let nodes = helpers::start_test_cluster_with_env(3, 3).await;
 
     let port1 = nodes[0].1.read().await.get_simple_node().unwrap().web_port;
 
@@ -29,21 +29,14 @@ async fn test_compute_sum_with_registered_function() {
     // Short sleep to allow sync to propagate
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Register a function
-    let register_req = r#"{
-        "name": "sum_values",
-        "script": "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum"
-    }"#;
-
-    let res = client
-        .post(format!("http://localhost:{port1}/functions"))
-        .header("Content-Type", "application/json")
-        .body(register_req)
-        .send()
-        .await
+    // Register a function manually (simulating config load)
+    let env1 = nodes[0].2.clone();
+    env1.get_function_registry()
+        .register(
+            "sum_values".to_string(),
+            "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum".to_string(),
+        )
         .unwrap();
-
-    assert!(res.status().is_success());
 
     // List functions to verify registration
     let res = client
@@ -76,25 +69,6 @@ async fn test_compute_sum_with_registered_function() {
         .as_f64()
         .unwrap();
     assert_eq!(result, 30.0);
-
-    // Delete the function
-    let res = client
-        .delete(format!("http://localhost:{port1}/functions/sum_values"))
-        .send()
-        .await
-        .unwrap();
-    assert!(res.status().is_success());
-
-    // Verify function is deleted
-    let res = client
-        .get(format!("http://localhost:{port1}/functions"))
-        .send()
-        .await
-        .unwrap();
-
-    let list_response: FunctionListResponse =
-        serde_json::from_str(res.text().await.unwrap().as_str()).unwrap();
-    assert!(!list_response.functions.contains(&"sum_values".to_string()));
 
     helpers::stop_nodes(nodes.into_iter().map(|n| n.0).collect()).await;
 }

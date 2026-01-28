@@ -82,12 +82,6 @@ pub struct ComputeResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegisterFunctionRequest {
-    pub name: String,
-    pub script: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionListResponse {
     pub functions: Vec<String>,
 }
@@ -855,166 +849,12 @@ async fn handle_remove_item_without_range(
 
 // ====================== Function Registry Handlers ======================
 
-async fn handle_register_function(
-    request: RegisterFunctionRequest,
-    env: Arc<Env>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let registry = env.get_function_registry();
-
-    // Validate the script by trying to compile it
-    // We don't execute, just check for syntax errors
-    match registry.register(request.name.clone(), request.script) {
-        Ok(()) => {
-            let response = ItemGenericResponseEnvelope {
-                success: Some(
-                    vec![(
-                        "registered".to_string(),
-                        serde_json::Value::String(request.name),
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
-                error: None,
-            };
-            Ok(warp::reply::json(&response))
-        }
-        Err(e) => {
-            let response = ItemGenericResponseEnvelope {
-                success: None,
-                error: Some(format!("Failed to register function: {e}")),
-            };
-            Ok(warp::reply::json(&response))
-        }
-    }
-}
-
 async fn handle_list_functions(env: Arc<Env>) -> Result<impl warp::Reply, warp::Rejection> {
     let registry = env.get_function_registry();
     let functions = registry.list();
 
     let response = FunctionListResponse { functions };
     Ok(warp::reply::json(&response))
-}
-
-async fn handle_delete_function(
-    name: String,
-    env: Arc<Env>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let registry = env.get_function_registry();
-
-    match registry.remove(&name) {
-        Ok(true) => {
-            let response = ItemGenericResponseEnvelope {
-                success: Some(
-                    vec![("deleted".to_string(), serde_json::Value::String(name))]
-                        .into_iter()
-                        .collect(),
-                ),
-                error: None,
-            };
-            Ok(warp::reply::json(&response))
-        }
-        Ok(false) => {
-            let response = ItemGenericResponseEnvelope {
-                success: None,
-                error: Some(format!("Function not found: {name}")),
-            };
-            Ok(warp::reply::json(&response))
-        }
-        Err(e) => {
-            let response = ItemGenericResponseEnvelope {
-                success: None,
-                error: Some(format!("Failed to delete function: {e}")),
-            };
-            Ok(warp::reply::json(&response))
-        }
-    }
-}
-
-async fn handle_compute_items(
-    partition_id: String,
-    req_path: FullPath,
-    compute_req: ComputeRequest,
-    memory: Arc<RwLock<NodeState>>,
-    env: Arc<Env>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let partition_key = PartitionKey(partition_id);
-
-    let routing_result = decide_routing(&partition_key, &Method::POST, memory.clone()).await;
-    let routing = match routing_result {
-        Ok(decision) => decision,
-        Err(envelope) => return Ok(warp::reply::json(&envelope)),
-    };
-
-    match routing {
-        RouteDecision::Remote { target } => {
-            match route_request::<ComputeRequest, ItemGenericResponseEnvelope>(
-                env.get_http_client(),
-                &target,
-                req_path.as_str(),
-                &Method::POST,
-                Some(&compute_req),
-            )
-            .await
-            {
-                Ok(remote_response) => Ok(warp::reply::json(&remote_response)),
-                Err(err) => Ok(warp::reply::json(&ItemGenericResponseEnvelope {
-                    success: None,
-                    error: Some(format!("Routing error: {err}")),
-                })),
-            }
-        }
-        RouteDecision::Local => {
-            let memory = memory.read().await;
-
-            match &*memory {
-                node::NodeState::Joined(node) => {
-                    let limit = 1000; // Default limit for compute
-                    let storage_key = StorageKey::new(partition_key, None);
-                    let store_ref = env.get_store();
-
-                    let item_entries =
-                        match node.get_items(limit, false, &storage_key, store_ref).await {
-                            Ok(item_entry) => item_entry,
-                            Err(e) => {
-                                let response = ItemGenericResponseEnvelope {
-                                    success: None,
-                                    error: Some(format!("Item retrieval error for compute: {e}")),
-                                };
-                                return Ok(warp::reply::json(&response));
-                            }
-                        };
-
-                    match crate::compute::execute_lua_async(item_entries, &compute_req.script).await
-                    {
-                        Ok(result) => {
-                            let response = ItemGenericResponseEnvelope {
-                                success: Some(
-                                    vec![("result".to_string(), result)].into_iter().collect(),
-                                ),
-                                error: None,
-                            };
-                            Ok(warp::reply::json(&response))
-                        }
-                        Err(e) => {
-                            let response = ItemGenericResponseEnvelope {
-                                success: None,
-                                error: Some(format!("Lua execution error: {e}")),
-                            };
-                            Ok(warp::reply::json(&response))
-                        }
-                    }
-                }
-                _ => {
-                    let response = ItemGenericResponseEnvelope {
-                        success: None,
-                        error: Some(CANNOT_PERFORM_ACTION_IN_CURRENT_STATE.to_string()),
-                    };
-                    Ok(warp::reply::json(&response))
-                }
-            }
-        }
-    }
 }
 
 pub async fn web_server_task(
@@ -1068,30 +908,11 @@ pub async fn web_server_task(
         .and_then(handle_remove_item_without_range);
 
     // Function registry routes
-    let register_function = warp::path!("functions")
-        .and(warp::post())
-        .and(warp::body::json())
-        .and(with_env(env.clone()))
-        .and_then(handle_register_function);
 
     let list_functions = warp::path!("functions")
         .and(warp::get())
         .and(with_env(env.clone()))
         .and_then(handle_list_functions);
-
-    let delete_function = warp::path!("functions" / String)
-        .and(warp::delete())
-        .and(with_env(env.clone()))
-        .and_then(handle_delete_function);
-
-    // Keep compute endpoint for backward compatibility (deprecated)
-    let compute_items = warp::path!("compute" / String)
-        .and(warp::post())
-        .and(warp::path::full())
-        .and(warp::body::json())
-        .and(with_memory(memory.clone()))
-        .and(with_env(env.clone()))
-        .and_then(handle_compute_items);
 
     let address = listen_on_address
         .as_str()
@@ -1106,10 +927,7 @@ pub async fn web_server_task(
             .or(get_items_count)
             .or(remove_item_with_range)
             .or(remove_item)
-            .or(register_function)
-            .or(list_functions)
-            .or(delete_function)
-            .or(compute_items),
+            .or(list_functions),
     )
     .run(address);
 

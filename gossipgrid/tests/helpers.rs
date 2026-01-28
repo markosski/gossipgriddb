@@ -28,10 +28,14 @@ pub async fn stop_nodes(runtimes: Vec<Result<NodeRuntime, NodeError>>) {
     }
 }
 
-pub async fn start_test_cluster(
+pub async fn start_test_cluster_with_env(
     partition_count: u16,
     replication_factor: u8,
-) -> Vec<(Result<NodeRuntime, NodeError>, Arc<RwLock<NodeState>>)> {
+) -> Vec<(
+    Result<NodeRuntime, NodeError>,
+    Arc<RwLock<NodeState>>,
+    Arc<Env>,
+)> {
     let test_uuid = Uuid::new_v4().to_string();
 
     let local_addr: NodeAddress = format!("127.0.0.1:{}", get_free_port())
@@ -184,8 +188,20 @@ pub async fn start_test_cluster(
     }
     // extra time for leaders to balance out
     vec![
-        (node_1, node_memory_1),
-        (node_2, node_memory_2),
-        (node_3, node_memory_3),
+        (node_1, node_memory_1, env1),
+        (node_2, node_memory_2, env2),
+        (node_3, node_memory_3, env3),
     ]
+}
+
+pub async fn start_test_cluster(
+    partition_count: u16,
+    replication_factor: u8,
+) -> Vec<(Result<NodeRuntime, NodeError>, Arc<RwLock<NodeState>>)> {
+    let nodes = start_test_cluster_with_env(partition_count, replication_factor).await;
+
+    nodes
+        .into_iter()
+        .map(|(runtime, memory, _env)| (runtime, memory))
+        .collect()
 }
