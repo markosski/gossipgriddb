@@ -40,7 +40,7 @@ impl EventBus {
 
     pub fn emit(&self, ev: Event) {
         if let Err(e) = self.tx.try_send(ev) {
-            error!("Failed to emit event: {}", e);
+            error!("Failed to emit event: {e}");
         }
     }
 }

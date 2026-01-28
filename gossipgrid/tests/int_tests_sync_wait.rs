@@ -12,8 +12,8 @@ async fn test_sync_ordering_proof() {
 
     let port1 = nodes[0].1.read().await.get_simple_node().unwrap().web_port;
     let port2 = nodes[1].1.read().await.get_simple_node().unwrap().web_port;
-    let leader_url = format!("http://localhost:{}/items", port1);
-    let replica_url = format!("http://localhost:{}/items/ordering_test", port2);
+    let leader_url = format!("http://localhost:{port1}/items");
+    let replica_url = format!("http://localhost:{port2}/items/ordering_test");
 
     let client = reqwest::Client::new();
     let partition_key = "ordering_test";
@@ -92,7 +92,7 @@ async fn test_sync_timeout_on_replica_failure() {
 
     // Immediately perform a POST to the leader.
     let port1 = nodes[0].1.read().await.get_simple_node().unwrap().web_port;
-    let leader_url = format!("http://localhost:{}/items", port1);
+    let leader_url = format!("http://localhost:{port1}/items");
     let client = reqwest::Client::new();
 
     let start_time = Instant::now();

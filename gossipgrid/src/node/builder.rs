@@ -60,6 +60,13 @@ pub struct NodeBuilder {
     cluster_config: Option<Cluster>,
     store: Option<Box<dyn Store + Send + Sync>>,
     is_ephemeral: bool,
+    functions_path: Option<std::path::PathBuf>,
+}
+
+#[derive(serde::Deserialize)]
+struct FunctionConfig {
+    name: String,
+    script: String,
 }
 
 impl Default for NodeBuilder {
@@ -78,7 +85,16 @@ impl NodeBuilder {
             cluster_config: None,
             store: None,
             is_ephemeral: false,
+            functions_path: None,
         }
+    }
+
+    /// Set a path to a JSON file containing functions to register at startup.
+    ///
+    /// The file should contain a JSON array of objects with "name" and "script" fields.
+    pub fn with_functions(mut self, path: std::path::PathBuf) -> Self {
+        self.functions_path = Some(path);
+        self
     }
 
     /// Set the address for gossip and sync communication.
@@ -227,6 +243,31 @@ impl NodeBuilder {
             self.join_peer,
             self.cluster_config,
         )));
+
+        // Load static functions if provided
+        if let Some(path) = self.functions_path {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => match serde_json::from_str::<Vec<FunctionConfig>>(&content) {
+                    Ok(functions) => {
+                        for func in functions {
+                            match env
+                                .get_function_registry()
+                                .register(func.name.clone(), func.script)
+                            {
+                                Ok(()) => log::info!("Registered function '{}'", func.name),
+                                Err(e) => log::error!(
+                                    "Failed to register function '{}': {}",
+                                    func.name,
+                                    e
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => log::error!("Failed to parse functions file {path:?}: {e}"),
+                },
+                Err(e) => log::error!("Failed to read functions file {path:?}: {e}"),
+            }
+        }
 
         // Start the node
         start_node(address, web_port, node_state, env).await

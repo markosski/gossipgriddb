@@ -91,6 +91,21 @@ impl FromStr for StorageKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct GetManyOptions {
+    pub limit: usize,
+    pub skip_null_rk: bool,
+}
+
+impl Default for GetManyOptions {
+    fn default() -> Self {
+        Self {
+            limit: 100,
+            skip_null_rk: false,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait StoreEngine: Send + Sync {
     /// Is this purely in-memory implementation?
@@ -103,13 +118,12 @@ pub trait StoreEngine: Send + Sync {
         key: &StorageKey,
     ) -> Result<Option<ItemEntry>, DataStoreError>;
 
-    /// Get many items by key and optional range_key
-    /// If range_key is None, get all items with the given key up to the limit
+    /// Options for get_many operation
     async fn get_many(
         &self,
         partition: &PartitionId,
         key: &StorageKey,
-        limit: usize,
+        options: GetManyOptions,
     ) -> Result<Vec<ItemEntry>, DataStoreError>;
 
     /// Insert item by key and range_key

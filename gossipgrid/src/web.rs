@@ -71,6 +71,21 @@ pub struct ItemCreateUpdate {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComputeRequest {
+    pub script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComputeResponse {
+    pub result: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionListResponse {
+    pub functions: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ItemOpsResponseEnvelope {
     pub success: Option<Vec<ItemResponse>>,
@@ -209,17 +224,21 @@ fn partition_key_from_path(req_path: &FullPath) -> Option<PartitionKey> {
         (Some("items"), Some(partition_id)) if !partition_id.is_empty() => {
             Some(PartitionKey(partition_id.to_string()))
         }
+        (Some("compute"), Some(partition_id)) if !partition_id.is_empty() => {
+            Some(PartitionKey(partition_id.to_string()))
+        }
         _ => None,
     }
 }
 
 async fn try_route_request(
     req_path: &FullPath,
+    params: Option<&HashMap<String, String>>,
     method: Method,
     item_submit: Option<ItemCreateUpdate>,
     memory: Arc<RwLock<NodeState>>,
     env: Arc<Env>,
-) -> Result<Option<ItemOpsResponseEnvelope>, warp::Rejection> {
+) -> Result<Option<serde_json::Value>, warp::Rejection> {
     let partition_key = match (&method, &item_submit) {
         (&Method::POST, Some(item)) => {
             StorageKey::new(
@@ -228,10 +247,12 @@ async fn try_route_request(
             )
             .partition_key
         }
-        (&Method::GET, None) | (&Method::DELETE, None) => match partition_key_from_path(req_path) {
-            Some(partition_key) => partition_key,
-            None => return Err(warp::reject::custom(WebError::RequestNotRoutable)),
-        },
+        (&Method::GET, None) | (&Method::DELETE, None) | (&Method::POST, None) => {
+            match partition_key_from_path(req_path) {
+                Some(partition_key) => partition_key,
+                None => return Err(warp::reject::custom(WebError::RequestNotRoutable)),
+            }
+        }
         _ => return Err(warp::reject::custom(WebError::RequestNotRoutable)),
     };
 
@@ -250,7 +271,7 @@ async fn try_route_request(
 
     let routing = match routing_result {
         Ok(decision) => decision,
-        Err(response) => return Ok(Some(response)),
+        Err(response) => return Ok(Some(serde_json::to_value(response).unwrap())),
     };
 
     info!(
@@ -260,20 +281,34 @@ async fn try_route_request(
 
     match routing {
         RouteDecision::Remote { target } => {
-            match route_request::<ItemCreateUpdate, ItemOpsResponseEnvelope>(
+            let mut url = req_path.as_str().to_string();
+            if let Some(params) = params
+                && !params.is_empty()
+            {
+                let query_string = serde_urlencoded::to_string(params).unwrap_or_default();
+                if !query_string.is_empty() {
+                    url.push('?');
+                    url.push_str(&query_string);
+                }
+            }
+
+            match route_request::<ItemCreateUpdate, serde_json::Value>(
                 env.get_http_client(),
                 &target,
-                req_path.as_str(),
+                &url,
                 &method,
                 item_submit.as_ref(),
             )
             .await
             {
                 Ok(remote_response) => Ok(Some(remote_response)),
-                Err(err) => Ok(Some(ItemOpsResponseEnvelope {
-                    success: None,
-                    error: Some(format!("Routing error: {err}")),
-                })),
+                Err(err) => {
+                    let err_resp = ItemGenericResponseEnvelope {
+                        success: None,
+                        error: Some(format!("Routing error: {err}")),
+                    };
+                    Ok(Some(serde_json::to_value(err_resp).unwrap()))
+                }
             }
         }
         RouteDecision::Local => Ok(None),
@@ -387,6 +422,7 @@ async fn handle_post_item(
 
     match try_route_request(
         &req_path,
+        None,
         Method::POST,
         Some(item_submit.clone()),
         memory.clone(),
@@ -503,7 +539,16 @@ async fn handle_get_items(
     memory: Arc<RwLock<NodeState>>,
     env: Arc<Env>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    match try_route_request(&req_path, Method::GET, None, memory.clone(), env.clone()).await {
+    match try_route_request(
+        &req_path,
+        Some(&params),
+        Method::GET,
+        None,
+        memory.clone(),
+        env.clone(),
+    )
+    .await
+    {
         Ok(Some(response_envelope)) => {
             return Ok(warp::reply::json(&response_envelope));
         }
@@ -521,20 +566,30 @@ async fn handle_get_items(
             Some(RangeKey(range_key))
         },
     );
-    // let storage_key: StorageKey = store_key.parse().unwrap();
     let storage_key_string = storage_key.to_string();
     let memory = memory.read().await;
 
     match &*memory {
         node::NodeState::Joined(node) => {
+            // Check for function execution via 'fn' query param
+            let function_name = params.get("fn");
+
             let limit = params
                 .get("limit")
-                .map(|v| v.parse::<usize>().unwrap_or(10))
-                .unwrap_or(10);
+                .map(|v| v.parse::<usize>().unwrap_or(1000))
+                .unwrap_or(if function_name.is_some() { 1000 } else { 10 });
+
+            let skip_null_rk = params
+                .get("skip_null_rk")
+                .map(|v| v.parse::<bool>().unwrap_or(false))
+                .unwrap_or(false);
 
             let store_ref = env.get_store();
 
-            let item_entries = match node.get_items(limit, &storage_key, store_ref).await {
+            let item_entries = match node
+                .get_items(limit, skip_null_rk, &storage_key, store_ref)
+                .await
+            {
                 Ok(item_entry) => item_entry,
                 Err(e) => {
                     let response = ItemOpsResponseEnvelope {
@@ -545,6 +600,51 @@ async fn handle_get_items(
                 }
             };
 
+            // If 'fn' param is present, execute the registered function
+            if let Some(fn_name) = function_name {
+                let registry = env.get_function_registry();
+                match registry.get(fn_name) {
+                    Some(func) => {
+                        let start = std::time::Instant::now();
+                        let item_count = item_entries.len();
+                        let compute_result =
+                            crate::compute::execute_lua_async(item_entries, &func.script).await;
+                        debug!(
+                            "Lua execution: {:?} for {} items",
+                            start.elapsed(),
+                            item_count
+                        );
+
+                        match compute_result {
+                            Ok(result) => {
+                                let response = ItemGenericResponseEnvelope {
+                                    success: Some(
+                                        vec![("result".to_string(), result)].into_iter().collect(),
+                                    ),
+                                    error: None,
+                                };
+                                return Ok(warp::reply::json(&response));
+                            }
+                            Err(e) => {
+                                let response = ItemGenericResponseEnvelope {
+                                    success: None,
+                                    error: Some(format!("Function execution error: {e}")),
+                                };
+                                return Ok(warp::reply::json(&response));
+                            }
+                        }
+                    }
+                    None => {
+                        let response = ItemGenericResponseEnvelope {
+                            success: None,
+                            error: Some(format!("Function not found: {fn_name}")),
+                        };
+                        return Ok(warp::reply::json(&response));
+                    }
+                }
+            }
+
+            // Normal item retrieval
             if !item_entries.is_empty() {
                 let response = ItemOpsResponseEnvelope {
                     success: Some(
@@ -634,7 +734,16 @@ async fn handle_remove_item(
         }
     };
 
-    match try_route_request(&req_path, Method::DELETE, None, memory.clone(), env.clone()).await {
+    match try_route_request(
+        &req_path,
+        None,
+        Method::DELETE,
+        None,
+        memory.clone(),
+        env.clone(),
+    )
+    .await
+    {
         Ok(Some(response_envelope)) => {
             return Ok(warp::reply::with_status(
                 warp::reply::json(&response_envelope),
@@ -738,6 +847,16 @@ async fn handle_remove_item_without_range(
     handle_remove_item(store_key, "".to_string(), req_path, memory, env).await
 }
 
+// ====================== Function Registry Handlers ======================
+
+async fn handle_list_functions(env: Arc<Env>) -> Result<impl warp::Reply, warp::Rejection> {
+    let registry = env.get_function_registry();
+    let functions = registry.list();
+
+    let response = FunctionListResponse { functions };
+    Ok(warp::reply::json(&response))
+}
+
 pub async fn web_server_task(
     listen_on_address: NodeAddress,
     memory: Arc<RwLock<NodeState>>,
@@ -788,6 +907,13 @@ pub async fn web_server_task(
         .and(with_env(env.clone()))
         .and_then(handle_remove_item_without_range);
 
+    // Function registry routes
+
+    let list_functions = warp::path!("functions")
+        .and(warp::get())
+        .and(with_env(env.clone()))
+        .and_then(handle_list_functions);
+
     let address = listen_on_address
         .as_str()
         .to_string()
@@ -800,7 +926,8 @@ pub async fn web_server_task(
             .or(get_items)
             .or(get_items_count)
             .or(remove_item_with_range)
-            .or(remove_item),
+            .or(remove_item)
+            .or(list_functions),
     )
     .run(address);
 

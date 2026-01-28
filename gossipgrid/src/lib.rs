@@ -30,9 +30,13 @@
 #[doc(hidden)]
 pub mod clock;
 #[doc(hidden)]
+pub mod compute;
+#[doc(hidden)]
 pub mod env;
 #[doc(hidden)]
 pub mod event_bus;
+#[doc(hidden)]
+pub mod function_registry;
 
 pub(crate) mod fs;
 pub(crate) mod gossip;

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use gossipgrid::WalLocalFile;
 use gossipgrid::event_bus::EventBus;
 use gossipgrid::node::{NodeAddress, NodeError, NodeRuntime};
@@ -28,10 +29,14 @@ pub async fn stop_nodes(runtimes: Vec<Result<NodeRuntime, NodeError>>) {
     }
 }
 
-pub async fn start_test_cluster(
+pub async fn start_test_cluster_with_env(
     partition_count: u16,
     replication_factor: u8,
-) -> Vec<(Result<NodeRuntime, NodeError>, Arc<RwLock<NodeState>>)> {
+) -> Vec<(
+    Result<NodeRuntime, NodeError>,
+    Arc<RwLock<NodeState>>,
+    Arc<Env>,
+)> {
     let test_uuid = Uuid::new_v4().to_string();
 
     let local_addr: NodeAddress = format!("127.0.0.1:{}", get_free_port())
@@ -60,7 +65,7 @@ pub async fn start_test_cluster(
     let env1: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(&format!("{}/wal_1", test_uuid), true)
+            WalLocalFile::new(&format!("{test_uuid}/wal_1"), true)
                 .await
                 .unwrap(),
         ),
@@ -70,7 +75,7 @@ pub async fn start_test_cluster(
     let env2: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(&format!("{}/wal_2", test_uuid), true)
+            WalLocalFile::new(&format!("{test_uuid}/wal_2"), true)
                 .await
                 .unwrap(),
         ),
@@ -80,7 +85,7 @@ pub async fn start_test_cluster(
     let env3: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(&format!("{}/wal_3", test_uuid), true)
+            WalLocalFile::new(&format!("{test_uuid}/wal_3"), true)
                 .await
                 .unwrap(),
         ),
@@ -154,7 +159,7 @@ pub async fn start_test_cluster(
 
         let joined_1 = if let NodeState::Joined(this_node) = &*node_mem_1 {
             let health = this_node.cluster.get_cluster_health();
-            info!("Node 1 cluster health: {:?}", health);
+            info!("Node 1 cluster health: {health:?}");
             health == ClusterHealth::Healthy
         } else {
             false
@@ -162,7 +167,7 @@ pub async fn start_test_cluster(
 
         let joined_2 = if let NodeState::Joined(this_node) = &*node_mem_2 {
             let health = this_node.cluster.get_cluster_health();
-            info!("Node 2 cluster health: {:?}", health);
+            info!("Node 2 cluster health: {health:?}");
             health == ClusterHealth::Healthy
         } else {
             false
@@ -170,7 +175,7 @@ pub async fn start_test_cluster(
 
         let joined_3 = if let NodeState::Joined(this_node) = &*node_mem_3 {
             let health = this_node.cluster.get_cluster_health();
-            info!("Node 3 cluster health: {:?}", health);
+            info!("Node 3 cluster health: {health:?}");
             health == ClusterHealth::Healthy
         } else {
             false
@@ -184,8 +189,20 @@ pub async fn start_test_cluster(
     }
     // extra time for leaders to balance out
     vec![
-        (node_1, node_memory_1),
-        (node_2, node_memory_2),
-        (node_3, node_memory_3),
+        (node_1, node_memory_1, env1),
+        (node_2, node_memory_2, env2),
+        (node_3, node_memory_3, env3),
     ]
+}
+
+pub async fn start_test_cluster(
+    partition_count: u16,
+    replication_factor: u8,
+) -> Vec<(Result<NodeRuntime, NodeError>, Arc<RwLock<NodeState>>)> {
+    let nodes = start_test_cluster_with_env(partition_count, replication_factor).await;
+
+    nodes
+        .into_iter()
+        .map(|(runtime, memory, _env)| (runtime, memory))
+        .collect()
 }

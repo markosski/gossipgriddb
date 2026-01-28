@@ -25,7 +25,7 @@ warp = { version = "0.4.2", features = ["server"] }
 twox-hash = { version = "2.1.*" }
 uuid = { version = "1.16.*", features = ["v4"] }
 rand = "0.9.*"
-log = { version="0.4.*", features=["kv", "release_max_level_warn"] }
+log = { version="0.4.*", features=["kv"] }
 env_logger = { version="0.11.*", features = ["unstable-kv"]}
 names = { version = "0.14.*", default-features = false }
 serde = { version = "1.0.*", features = ["derive"] }
@@ -41,6 +41,9 @@ crossbeam-channel = { version = "0.4" }
 fastcache = { version = "0.1.7" }
 dashmap = "6.1.0"
 futures = "0.3.31"
+mlua = { version = "0.9", features = ["serialize", "lua54", "vendored"] }
+serde_urlencoded = "0.7"
+
 
 [dev-dependencies]
 console-subscriber = "0.5.0"

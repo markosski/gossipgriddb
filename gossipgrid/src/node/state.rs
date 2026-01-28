@@ -613,12 +613,17 @@ impl JoinedNode {
     pub async fn get_items(
         &self,
         limit: usize,
+        skip_null_rk: bool,
         store_key: &StorageKey,
         store: &dyn Store,
     ) -> Result<Vec<ItemEntry>, NodeError> {
         let partition = self.cluster.hash_key(store_key.partition_key.value());
+        let options = crate::store::GetManyOptions {
+            limit,
+            skip_null_rk,
+        };
         let maybe_item = store
-            .get_many(&partition, store_key, limit)
+            .get_many(&partition, store_key, options)
             .await
             .map_err(|e| NodeError::ItemOperationError(e.to_string()))?;
         Ok(maybe_item)
