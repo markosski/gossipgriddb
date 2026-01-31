@@ -47,6 +47,7 @@ pub struct Cluster {
     pub created_at: u64,
     pub updated_at: u64,
     pub is_ephemeral: bool,
+    pub config_hlc: HLC,
 }
 
 impl From<Cluster> for ClusterMetadata {
@@ -63,6 +64,7 @@ impl From<Cluster> for ClusterMetadata {
                 .map(|(&k, (v, _))| (k, v.clone()))
                 .collect(),
             created_at: val.created_at,
+            config_hlc: val.config_hlc,
         }
     }
 }
@@ -77,7 +79,7 @@ impl Cluster {
         is_ephemeral: bool,
     ) -> Self {
         let now = now_millis();
-        let partition_assignments = strategy::generate_partition_assignments_spread(
+        let partition_assignments = strategy::generate_partition_assignments_rendezvous(
             cluster_size,
             partition_count,
             replication_factor,
@@ -94,6 +96,10 @@ impl Cluster {
             created_at: now,
             updated_at: now,
             is_ephemeral,
+            config_hlc: HLC {
+                timestamp: now,
+                counter: 0,
+            },
         }
     }
 
@@ -126,6 +132,7 @@ impl Cluster {
             created_at: metadata.created_at,
             updated_at: now_millis(),
             is_ephemeral: false,
+            config_hlc: metadata.config_hlc,
         };
         Ok(cconfig)
     }
@@ -261,6 +268,9 @@ impl Cluster {
             *assignment = node.into();
             self.updated_at = now_millis();
             let leader_changed = self.assign_partition_leaders();
+            if changed || leader_changed {
+                self.config_hlc = self.config_hlc.tick_hlc(self.updated_at);
+            }
             Ok(changed || leader_changed)
         } else {
             Err(ClusterOperationError::IoError(io::Error::new(
@@ -289,6 +299,10 @@ impl Cluster {
             }
         }
         let leader_changed = self.assign_partition_leaders();
+        if changed || leader_changed {
+            self.updated_at = now_millis();
+            self.config_hlc = self.config_hlc.tick_hlc(self.updated_at);
+        }
         Ok(changed || leader_changed)
     }
 
@@ -306,6 +320,58 @@ impl Cluster {
         Err(ClusterOperationError::IoError(io::Error::other(
             "No unassigned nodes available",
         )))
+    }
+
+    pub fn resize(&mut self, new_size: u8) -> Result<(), ClusterOperationError> {
+        if new_size == self.cluster_size {
+            return Ok(());
+        }
+
+        if new_size < self.cluster_size {
+            let disconnected_nodes = self
+                .partition_assignments
+                .values()
+                .filter(|(_, assignment)| {
+                    matches!(assignment, AssignmentState::Disconnected { .. })
+                })
+                .count();
+
+            if disconnected_nodes == 0 {
+                return Err(ClusterOperationError::DownsizeError(
+                    "Cannot downsize cluster: no nodes are in Disconnected state".to_string(),
+                ));
+            }
+        }
+
+        let old_assignments = self.partition_assignments.clone();
+
+        // Regenerate assignments with new size using Rendezvous hashing for stability
+        self.partition_assignments = strategy::generate_partition_assignments_rendezvous(
+            new_size,
+            self.partition_count,
+            self.replication_factor,
+        );
+
+        // Preserve states of existing nodes that are still within new size
+        for node_index in 0..new_size {
+            if let Some((_, old_state)) = old_assignments.get(&node_index) {
+                if let Some((_, new_state)) = self.partition_assignments.get_mut(&node_index) {
+                    *new_state = old_state.clone();
+                }
+            }
+        }
+
+        self.cluster_size = new_size;
+        self.updated_at = now_millis();
+        self.config_hlc = self.config_hlc.tick_hlc(self.updated_at);
+
+        // Update leadership
+        self.assign_partition_leaders();
+
+        // Persist
+        self.save()?;
+
+        Ok(())
     }
 
     pub fn is_fully_assigned(&self) -> bool {
@@ -336,12 +402,10 @@ impl Cluster {
         }
 
         // 3. Check if all assigned nodes (including replicas) are in 'Joined' state
-        let all_joined = self.partition_assignments.values().all(|(_, assignment)| {
-            matches!(
-                assignment,
-                AssignmentState::Joined { .. } | AssignmentState::Unassigned
-            )
-        });
+        let all_joined = self
+            .partition_assignments
+            .values()
+            .all(|(_, assignment)| matches!(assignment, AssignmentState::Joined { .. }));
 
         if all_joined {
             ClusterHealth::Healthy
@@ -506,9 +570,26 @@ impl Cluster {
         &mut self,
         sender_node: &SimpleNode,
         other_peers: &HashMap<NodeId, SimpleNode>,
+        new_cluster_size: u8,
+        incoming_config_hlc: &HLC,
     ) -> Result<bool, ClusterOperationError> {
-        let sender_idx = self.get_node_index(&sender_node.address);
         let mut changed = false;
+
+        if incoming_config_hlc > &self.config_hlc {
+            // Merge incoming config HLC to keep track of the latest topology version
+            self.config_hlc = HLC::merge(&self.config_hlc, incoming_config_hlc, now_millis());
+
+            if new_cluster_size != self.cluster_size {
+                info!(
+                    "node={}; Cluster size change detected: {} -> {}",
+                    self.this_node_index, self.cluster_size, new_cluster_size
+                );
+                self.resize(new_cluster_size)?;
+                changed = true;
+            }
+        }
+
+        let sender_idx = self.get_node_index(&sender_node.address);
 
         for (idx, (_, assignment)) in &mut self.partition_assignments {
             let remote_node = if Some(*idx) == sender_idx {

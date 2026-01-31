@@ -1,3 +1,4 @@
+mod cluster;
 mod functions;
 mod items;
 mod server;

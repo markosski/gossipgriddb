@@ -565,8 +565,16 @@ pub async fn server_sync_handler_task(
                 info!("node={}; Shutting down sync server", &node_address);
                 break;
             }
-            Ok((stream, addr)) = listener.accept() => (stream, addr),
-            else => break,
+            res = listener.accept() => {
+                match res {
+                    Ok(val) => val,
+                    Err(e) => {
+                        error!("node={}; Error accepting sync connection: {}", &node_address, e);
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                }
+            }
         };
 
         let async_node_address = node_address.clone();

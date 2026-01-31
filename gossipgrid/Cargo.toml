@@ -21,7 +21,7 @@ memory-store = []
 
 [dependencies]
 tokio = { version = "1.48.0", features = ["net", "sync", "time", "rt-multi-thread", "macros", "signal"] }
-warp = { version = "0.4.2", features = ["server"] }
+warp = { version = "0.4.2", features = ["server", "test"] }
 twox-hash = { version = "2.1.*" }
 uuid = { version = "1.16.*", features = ["v4"] }
 rand = "0.9.*"

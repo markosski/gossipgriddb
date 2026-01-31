@@ -17,6 +17,8 @@ pub enum ClusterOperationError {
     ClusterNotFound(String),
     #[error("Error updating cluster state: {0}")]
     ClusterStateChangeError(String),
+    #[error("Cannot downsize cluster: {0}")]
+    DownsizeError(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
@@ -148,6 +150,7 @@ pub struct ClusterMetadata {
     pub replication_factor: u8,
     pub partition_assignments: HashMap<u8, Vec<PartitionId>>,
     pub created_at: u64,
+    pub config_hlc: HLC,
 }
 
 pub type PartitionAssignments = HashMap<u8, (Vec<PartitionId>, AssignmentState)>;

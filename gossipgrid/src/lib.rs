@@ -37,6 +37,8 @@ pub mod env;
 pub mod event_bus;
 #[doc(hidden)]
 pub mod function_registry;
+#[doc(hidden)]
+pub mod util;
 
 pub(crate) mod fs;
 pub(crate) mod gossip;

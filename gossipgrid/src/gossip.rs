@@ -4,14 +4,17 @@ use crate::env::Env;
 
 use crate::clock::now_millis;
 use crate::node::{self, NodeAddress, NodeState, PreJoinNode, SimpleNode};
+use crate::util;
 use bincode::{Decode, Encode};
 use crossbeam_channel::Sender;
 use laminar::{Packet, SocketEvent};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 use std::cmp::min;
 use std::collections::HashMap;
+use std::fmt;
 use std::net::SocketAddr;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
@@ -85,6 +88,26 @@ pub struct NodeClusterMetadata {
 pub struct GossipMembershipMessage {
     pub node: SimpleNode,
     pub other_peers: HashMap<u8, SimpleNode>,
+    pub cluster_size: u8,
+    pub config_hlc: HLC,
+}
+
+impl fmt::Display for GossipMembershipMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GossipMembershipMessage {{ node: {}, other_peers: {}, cluster_size: {}, config_hlc: {:?} }}",
+            self.node,
+            util::DisplayVec(
+                self.other_peers
+                    .iter()
+                    .map(|(k, v)| format!("{}:{}", k, v))
+                    .collect()
+            ),
+            self.cluster_size,
+            self.config_hlc,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Encode, Decode)]
@@ -92,6 +115,18 @@ pub enum UdpWireMessage {
     Gossip(GossipMembershipMessage),
     GossipJoinRequest(NodeJoinRequest),
     GossipJoinRequestAck(NodeJoinAck),
+}
+
+impl fmt::Display for UdpWireMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UdpWireMessage::Gossip(msg) => write!(f, "Gossip({})", msg),
+            UdpWireMessage::GossipJoinRequest(msg) => write!(f, "GossipJoinRequest({:?})", msg),
+            UdpWireMessage::GossipJoinRequestAck(msg) => {
+                write!(f, "GossipJoinRequestAck({:?})", msg)
+            }
+        }
+    }
 }
 
 pub async fn handle_messages_task(
@@ -450,7 +485,12 @@ async fn handle_join_ack(
 
                 let membership_changed = joined_node
                     .cluster
-                    .update_cluster_membership(&message.node, &message.cluster_config.other_peers())
+                    .update_cluster_membership(
+                        &message.node,
+                        &message.cluster_config.other_peers(),
+                        message.cluster_config.cluster_size,
+                        &message.cluster_config.config_hlc,
+                    )
                     .unwrap_or_default();
 
                 if state_changed || membership_changed {
@@ -476,7 +516,7 @@ async fn handle_membership_message(
 ) {
     let mut node_state = state.write().await;
     info!(
-        "node={}; Message Received {:?} from {}:{}",
+        "node={}; Message Received {} from {}:{}",
         node_state.get_address(),
         message,
         src.ip(),
@@ -491,7 +531,12 @@ async fn handle_membership_message(
             // to decide whether to update its state.
             let changed = this_node
                 .cluster
-                .update_cluster_membership(&message.node, &message.other_peers)
+                .update_cluster_membership(
+                    &message.node,
+                    &message.other_peers,
+                    message.cluster_size,
+                    &message.config_hlc,
+                )
                 .unwrap_or_default();
 
             // 2. Merge local HLC with the incoming message's HLC to keep clocks synchronized.
@@ -662,6 +707,8 @@ pub async fn send_membership_gossip_task(
                     let msg = UdpWireMessage::Gossip(GossipMembershipMessage {
                         node: node_state.get_simple_node().unwrap(),
                         other_peers: this_node.cluster.other_peers(),
+                        cluster_size: this_node.cluster.cluster_size,
+                        config_hlc: this_node.cluster.config_hlc.clone(),
                     });
 
                     if let Ok(encoded_gossip) =
@@ -693,7 +740,7 @@ pub async fn send_membership_gossip_task(
                     }
 
                     info!(
-                        "node={:?}; sent {:?} to {:?}",
+                        "node={:?}; sent {} to {:?}",
                         node_state.get_address(),
                         msg,
                         &peer_dest_addr,
@@ -717,28 +764,45 @@ pub async fn send_membership_gossip_task(
                     &this_node.cluster.this_node_index,
                     &node_state.get_state_name()
                 );
-                info!(
+                debug!(
                     "node={}; Leader partition LSNs: {:?}",
-                    node_address, &this_node.sync_state.leader_confirmed_lsn,
+                    node_address,
+                    &this_node
+                        .sync_state
+                        .leader_confirmed_lsn
+                        .iter()
+                        .map(|entry| format!("{}:{:?}", entry.key(), entry.value()))
+                        .collect::<Vec<_>>(),
                 );
-                info!(
+                debug!(
                     "node={}; Replica partition LSNs: {:?}",
-                    node_address, &this_node.sync_state.replica_partition_lsn,
+                    node_address,
+                    &this_node
+                        .sync_state
+                        .replica_partition_lsn
+                        .iter()
+                        .map(|entry| format!("{}:{:?}", entry.key(), entry.value()))
+                        .collect::<Vec<_>>(),
                 );
                 info!(
                     "node={}; Known peers: {:?}",
                     node_address,
-                    &this_node.cluster.other_peers()
+                    this_node
+                        .cluster
+                        .other_peers()
+                        .iter()
+                        .map(|(k, v)| format!("{}:{}", k, v))
+                        .collect::<Vec<_>>(),
                 );
-                info!(
+                debug!(
                     "node={}; Total item count: {}",
                     node_address,
                     &this_node.get_all_items_count()
                 );
                 info!(
-                    "node={}; leader for partitions: {:?}",
+                    "node={}; Number of leader partitions: {}",
                     node_address,
-                    &this_node.cluster.get_this_leaders_partitions(),
+                    &this_node.cluster.get_this_leaders_partitions().len(),
                 );
             }
         };

@@ -1,5 +1,6 @@
 use crate::env::Env;
 use crate::node::{NodeAddress, NodeState};
+use crate::web::cluster::{handle_get_cluster, handle_resize_cluster};
 use crate::web::functions::handle_list_functions;
 use crate::web::items::{
     handle_get_item_count, handle_get_items, handle_get_items_without_range, handle_post_item,
@@ -81,6 +82,17 @@ pub async fn web_server_task(
         .and(with_env(env.clone()))
         .and_then(handle_list_functions);
 
+    let get_cluster = warp::path!("cluster")
+        .and(warp::get())
+        .and(with_memory(memory.clone()))
+        .and_then(handle_get_cluster);
+
+    let resize_cluster = warp::path!("cluster" / "resize")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(with_memory(memory.clone()))
+        .and_then(handle_resize_cluster);
+
     let address = listen_on_address
         .as_str()
         .to_string()
@@ -94,7 +106,9 @@ pub async fn web_server_task(
             .or(get_items_count)
             .or(remove_item_with_range)
             .or(remove_item)
-            .or(list_functions),
+            .or(list_functions)
+            .or(get_cluster)
+            .or(resize_cluster),
     )
     .run(address);
 

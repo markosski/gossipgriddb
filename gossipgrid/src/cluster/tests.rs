@@ -1,6 +1,6 @@
-use crate::clock::HLC;
+use crate::clock::{HLC, now_millis};
 use crate::cluster::state::Cluster;
-use crate::cluster::types::{AssignmentNode, AssignmentState, PartitionId};
+use crate::cluster::types::{AssignmentNode, AssignmentState, ClusterOperationError, PartitionId};
 use crate::node::{self, NodeAddress, NodeId, NodeState, SimpleNode, SimpleNodeState};
 use std::collections::HashMap;
 
@@ -27,6 +27,7 @@ fn build_config(assignments: Vec<(NodeId, Vec<u16>)>) -> Cluster {
         created_at: 0,
         updated_at: 0,
         is_ephemeral: true,
+        config_hlc: HLC::default(),
     }
 }
 
@@ -452,9 +453,10 @@ fn test_next_nodes() {
 #[test]
 fn test_partition_balancing() {
     let config = Cluster::new("test".into(), 3, 0, 6, 2, true);
+    let expected_counts = vec![5, 2, 5];
     for node_idx in 0..3 {
         let partitions = config.get_assigned_partitions(node_idx).unwrap();
-        assert_eq!(partitions.len(), 4);
+        assert_eq!(partitions.len(), expected_counts[node_idx as usize]);
     }
 }
 
@@ -513,8 +515,10 @@ fn test_hlc_ordering_with_clock_drift() {
 
     let mut peers = std::collections::HashMap::new();
     peers.insert(1, node_1_disconnected_stale);
+    let current_size = config.cluster_size;
+    let current_config_hlc = config.config_hlc.clone();
     config
-        .update_cluster_membership(&dummy_sender, &peers)
+        .update_cluster_membership(&dummy_sender, &peers, current_size, &current_config_hlc)
         .unwrap();
 
     assert!(matches!(
@@ -536,8 +540,10 @@ fn test_hlc_ordering_with_clock_drift() {
         leading_partitions: vec![],
     };
     peers.insert(1, node_1_joined_newer.clone());
+    let current_size = config.cluster_size;
+    let next_config_hlc = config.config_hlc.tick_hlc(now_millis());
     config
-        .update_cluster_membership(&node_1_joined_newer, &peers)
+        .update_cluster_membership(&node_1_joined_newer, &peers, current_size, &next_config_hlc)
         .unwrap();
 
     assert!(matches!(
@@ -559,8 +565,10 @@ fn test_hlc_ordering_with_clock_drift() {
         leading_partitions: vec![],
     };
     peers.insert(1, node_1_disconnected_authoritative);
+    let current_size = config.cluster_size;
+    let next_config_hlc = config.config_hlc.tick_hlc(now_millis());
     config
-        .update_cluster_membership(&dummy_sender, &peers)
+        .update_cluster_membership(&dummy_sender, &peers, current_size, &next_config_hlc)
         .unwrap();
 
     assert!(matches!(
@@ -629,19 +637,31 @@ fn test_leadership_merge_gossip() {
 
     let mut peers = HashMap::new();
     peers.insert(1, node_1.clone());
-    config.update_cluster_membership(&node_1, &peers).unwrap();
+    let current_size = config.cluster_size;
+    let next_config_hlc = config.config_hlc.tick_hlc(now_millis());
+    config
+        .update_cluster_membership(&node_1, &peers, current_size, &next_config_hlc)
+        .unwrap();
 
     assert_eq!(config.partition_leaders.get(&PartitionId(0)), Some(&0));
 
     let mut peers = HashMap::new();
     peers.insert(2, node_2.clone());
-    config.update_cluster_membership(&node_2, &peers).unwrap();
+    let current_size = config.cluster_size;
+    let next_config_hlc = config.config_hlc.tick_hlc(now_millis());
+    config
+        .update_cluster_membership(&node_2, &peers, current_size, &next_config_hlc)
+        .unwrap();
 
     assert_eq!(config.partition_leaders.get(&PartitionId(0)), Some(&0));
 
     let mut peers = HashMap::new();
     peers.insert(1, node_1.clone());
-    config.update_cluster_membership(&node_1, &peers).unwrap();
+    let current_size = config.cluster_size;
+    let next_config_hlc = config.config_hlc.tick_hlc(now_millis());
+    config
+        .update_cluster_membership(&node_1, &peers, current_size, &next_config_hlc)
+        .unwrap();
 
     assert_eq!(config.partition_leaders.get(&PartitionId(0)), Some(&0));
 }
@@ -796,8 +816,78 @@ fn test_leader_election_distribution_balance() {
     }
 
     assert_eq!(leader_counts.get(&0), Some(&3));
-    assert_eq!(leader_counts.get(&1), Some(&3));
-    assert_eq!(leader_counts.get(&2), Some(&3));
+    assert_eq!(leader_counts.get(&1), Some(&2));
+    assert_eq!(leader_counts.get(&2), Some(&4));
+}
+
+#[test]
+fn test_cluster_resize() {
+    let mut config = Cluster::new("test-cluster".to_string(), 3, 0, 9, 2, true);
+    assert_eq!(config.cluster_size, 3);
+    assert_eq!(config.partition_assignments.len(), 3);
+
+    // Initial assignment for node 0
+    let node_0 = SimpleNode {
+        address: NodeAddress::parse_unchecked("127.0.0.1:4000"),
+        state: node::SimpleNodeState::Joined,
+        web_port: 3000,
+        last_seen: 0,
+        hlc: HLC::default(),
+        partition_item_counts: HashMap::new(),
+        leading_partitions: vec![],
+    };
+    config.assign_node(&0, &node_0).unwrap();
+    assert!(matches!(
+        config.partition_assignments.get(&0).unwrap().1,
+        AssignmentState::Joined { .. }
+    ));
+
+    // Resize UP to 5
+    config.resize(5).unwrap();
+    assert_eq!(config.cluster_size, 5);
+    assert_eq!(config.partition_assignments.len(), 5);
+
+    // Node 0 should still be Joined
+    assert!(matches!(
+        config.partition_assignments.get(&0).unwrap().1,
+        AssignmentState::Joined { .. }
+    ));
+    // Nodes 3 and 4 should be Unassigned
+    assert!(matches!(
+        config.partition_assignments.get(&3).unwrap().1,
+        AssignmentState::Unassigned
+    ));
+    assert!(matches!(
+        config.partition_assignments.get(&4).unwrap().1,
+        AssignmentState::Unassigned
+    ));
+
+    // Resize DOWN to 2 - SHOULD FAIL first
+    assert!(config.resize(2).is_err());
+
+    // Assign node 2 first so we can disconnect it
+    let node_2 = SimpleNode {
+        address: NodeAddress::parse_unchecked("127.0.0.1:4002"),
+        state: node::SimpleNodeState::Joined,
+        web_port: 3002,
+        last_seen: 0,
+        hlc: HLC::default(),
+        partition_item_counts: HashMap::new(),
+        leading_partitions: vec![],
+    };
+    config.assign_node(&2, &node_2).unwrap();
+
+    // Disconnect node 2
+    config.unassign_node(&2, &HLC::default()).unwrap();
+
+    // Resize DOWN to 2 - SHOULD SUCCEED
+    config.resize(2).unwrap();
+    assert_eq!(config.cluster_size, 2);
+    assert_eq!(config.partition_assignments.len(), 2);
+    assert!(matches!(
+        config.partition_assignments.get(&0).unwrap().1,
+        AssignmentState::Joined { .. }
+    ));
 }
 
 #[test]
@@ -826,8 +916,8 @@ fn test_leader_election_distribution_on_node_failure() {
         *leader_counts.entry(*leader).or_insert(0) += 1;
     }
     assert_eq!(leader_counts.get(&0), Some(&3));
-    assert_eq!(leader_counts.get(&1), Some(&3));
-    assert_eq!(leader_counts.get(&2), Some(&3));
+    assert_eq!(leader_counts.get(&1), Some(&2));
+    assert_eq!(leader_counts.get(&2), Some(&4));
 
     // Simulate Node 0 dropping off
     config.unassign_node(&0, &HLC::default()).unwrap();
@@ -840,13 +930,9 @@ fn test_leader_election_distribution_on_node_failure() {
         }
     }
 
-    // With static priority (partition_id % 3) and RF=2:
-    // P0, P3, P6 were led by N0. Replicas are {0, 1}. Only 1 available -> N1 takes 3.
-    // P1, P4, P7 were led by N1. Replicas are {1, 2}. N1 is higher priority -> N1 keeps 3.
-    // P2, P5, P8 were led by N2. Replicas are {2, 0}. N0 is down -> N2 keeps 3.
-    // Total: N1=6, N2=3
-    assert_eq!(leader_counts.get(&1), Some(&6));
-    assert_eq!(leader_counts.get(&2), Some(&3));
+    // Total: N1=3, N2=6
+    assert_eq!(leader_counts.get(&1), Some(&3));
+    assert_eq!(leader_counts.get(&2), Some(&6));
 }
 
 #[test]
@@ -878,7 +964,7 @@ fn test_leader_election_distribution_on_rejoin() {
             .values()
             .filter(|&&n| n == 1)
             .count(),
-        6
+        3
     );
     assert_eq!(
         config
@@ -886,7 +972,7 @@ fn test_leader_election_distribution_on_rejoin() {
             .values()
             .filter(|&&n| n == 2)
             .count(),
-        3
+        6
     );
 
     // 3. Node 0 rejoins -> Should balance back to 3-3-3
@@ -909,8 +995,8 @@ fn test_leader_election_distribution_on_rejoin() {
     }
 
     assert_eq!(leader_counts.get(&0), Some(&3));
-    assert_eq!(leader_counts.get(&1), Some(&3));
-    assert_eq!(leader_counts.get(&2), Some(&3));
+    assert_eq!(leader_counts.get(&1), Some(&2));
+    assert_eq!(leader_counts.get(&2), Some(&4));
 }
 
 #[tokio::test]
@@ -1025,8 +1111,184 @@ fn test_leadership_change_detection() {
     let changed = config.unassign_node(&0, &HLC::new()).unwrap();
     assert!(changed);
     assert_eq!(config.partition_leaders.get(&PartitionId(0)), Some(&1));
-
     // Calling assign_partition_leaders manually when no change occurred
     let changed = config.assign_partition_leaders();
     assert!(!changed);
+}
+
+#[test]
+fn test_cluster_resize_overwrite_bug() {
+    let mut config = Cluster::new("test-cluster".to_string(), 3, 0, 9, 2, true);
+    assert_eq!(config.cluster_size, 3);
+
+    // Node 1 (as sender)
+    let node_1 = SimpleNode {
+        address: NodeAddress::parse_unchecked("127.0.0.1:4001"),
+        state: SimpleNodeState::Joined,
+        web_port: 3001,
+        last_seen: 0,
+        hlc: HLC::default(),
+        partition_item_counts: HashMap::new(),
+        leading_partitions: vec![],
+    };
+
+    // 1. Simulate a resize on the local node
+    config.resize(5).unwrap();
+    assert_eq!(config.cluster_size, 5);
+
+    // 2. Receive gossip from node_1 with OLD cluster size (3)
+    let peers = HashMap::new();
+    config
+        .update_cluster_membership(&node_1, &peers, 3, &HLC::default()) // Old size, stale HLC
+        .unwrap();
+
+    // 3. VERIFY FIX: The local resize to 5 should NOT be overwritten by the old size 3
+    assert_eq!(
+        config.cluster_size, 5,
+        "FIX FAILED: Cluster size was overwritten by stale gossip even with config_hlc"
+    );
+}
+
+#[test]
+fn test_config_hlc_blocks_node_updates_repro() {
+    let mut config_a = Cluster::new("test".into(), 3, 0, 1, 3, true);
+
+    // Node A has a very high config_hlc (as if it just did a resize)
+    config_a.config_hlc = HLC {
+        timestamp: 1000000,
+        counter: 0,
+    };
+
+    let addr_c = NodeAddress::parse_unchecked("127.0.0.1:4002");
+    let node_c_initial = SimpleNode {
+        address: addr_c.clone(),
+        state: SimpleNodeState::Joined,
+        web_port: 3002,
+        last_seen: 1000,
+        hlc: HLC {
+            timestamp: 1000,
+            counter: 0,
+        },
+        partition_item_counts: HashMap::new(),
+        leading_partitions: vec![],
+    };
+    config_a.assign_node(&2, &node_c_initial).unwrap();
+
+    // Node B has a STALE config_hlc but FRESH information about Node C
+    let mut partition_item_counts_fresh = HashMap::new();
+    partition_item_counts_fresh.insert(PartitionId(0), 42);
+
+    let node_c_fresh = SimpleNode {
+        address: addr_c.clone(),
+        state: SimpleNodeState::Joined,
+        web_port: 3002,
+        last_seen: 2000,
+        hlc: HLC {
+            timestamp: 2000,
+            counter: 0,
+        }, // Newer HLC
+        partition_item_counts: partition_item_counts_fresh,
+        leading_partitions: vec![],
+    };
+
+    let mut other_peers_b = HashMap::new();
+    other_peers_b.insert(2, node_c_fresh);
+
+    let sender_b = SimpleNode {
+        address: NodeAddress::parse_unchecked("127.0.0.1:4001"),
+        state: SimpleNodeState::Joined,
+        web_port: 3001,
+        last_seen: 1000,
+        hlc: HLC {
+            timestamp: 1000,
+            counter: 0,
+        },
+        partition_item_counts: HashMap::new(),
+        leading_partitions: vec![],
+    };
+
+    // Stale config HLC from Node B
+    let stale_config_hlc = HLC {
+        timestamp: 500,
+        counter: 0,
+    };
+
+    // Node A receives gossip from Node B
+    config_a
+        .update_cluster_membership(&sender_b, &other_peers_b, 3, &stale_config_hlc)
+        .unwrap();
+
+    // Verify if Node C's state was updated in Node A
+    let node_c_in_a = match config_a.partition_assignments.get(&2).unwrap().1.clone() {
+        AssignmentState::Joined { node, .. } => node,
+        _ => panic!("Expected Joined state"),
+    };
+
+    // THIS SHOULD FAIL (it will still be 0 if the bug exists)
+    assert_eq!(
+        *node_c_in_a
+            .partition_item_counts
+            .get(&PartitionId(0))
+            .unwrap_or(&0),
+        42,
+        "Node C's item counts should have been updated despite stale config_hlc"
+    );
+}
+
+#[test]
+fn test_cluster_downsize_restriction() {
+    let mut config = Cluster::new("test-cluster".to_string(), 4, 0, 9, 2, true);
+    assert_eq!(config.cluster_size, 4);
+
+    // Initial assignment for nodes
+    for i in 0..4 {
+        let node = SimpleNode {
+            address: NodeAddress::parse_unchecked(&format!("127.0.0.1:400{}", i)),
+            state: node::SimpleNodeState::Joined,
+            web_port: 3000 + i as u16,
+            last_seen: 0,
+            hlc: HLC::default(),
+            partition_item_counts: HashMap::new(),
+            leading_partitions: vec![],
+        };
+        config.assign_node(&i, &node).unwrap();
+    }
+
+    // 1. Attempt to downsize to 3 without any disconnected nodes - SHOULD FAIL
+    let result = config.resize(3);
+    assert!(result.is_err());
+    if let Err(ClusterOperationError::DownsizeError(msg)) = result {
+        assert!(msg.contains("no nodes are in Disconnected state"));
+    } else {
+        panic!(
+            "Expected ClusterOperationError::DownsizeError, got {:?}",
+            result
+        );
+    }
+
+    // 2. Disconnect node 3
+    config.unassign_node(&3, &HLC::default()).unwrap();
+    assert!(matches!(
+        config.partition_assignments.get(&3).unwrap().1,
+        AssignmentState::Disconnected { .. }
+    ));
+
+    // 3. Attempt to downsize to 3 with one disconnected node - SHOULD SUCCEED
+    config
+        .resize(3)
+        .expect("Downsize should succeed after disconnecting a node");
+    assert_eq!(config.cluster_size, 3);
+
+    // 4. Attempt to downsize to 2 without any MORE disconnected nodes - SHOULD FAIL
+    // (Node 3 is already gone, so we have 3 nodes: 0, 1, 2, all Joined)
+    let result = config.resize(2);
+    assert!(result.is_err());
+    if let Err(ClusterOperationError::DownsizeError(msg)) = result {
+        assert!(msg.contains("no nodes are in Disconnected state"));
+    } else {
+        panic!(
+            "Expected ClusterOperationError::DownsizeError, got {:?}",
+            result
+        );
+    }
 }

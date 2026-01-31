@@ -15,7 +15,7 @@ use dashmap::DashMap;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -95,6 +95,22 @@ pub struct SimpleNode {
     pub hlc: HLC,
     pub partition_item_counts: HashMap<PartitionId, usize>,
     pub leading_partitions: Vec<PartitionId>,
+}
+
+impl fmt::Display for SimpleNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SimpleNode {{ address: {}, state: {:?}, web_port: {}, last_seen: {}, hlc: {:?}, partition_item_counts sum: {}, leading_partitions count: {} }}",
+            self.address,
+            self.state,
+            self.web_port,
+            self.last_seen,
+            self.hlc,
+            self.partition_item_counts.values().sum::<usize>(),
+            self.leading_partitions.len()
+        )
+    }
 }
 
 impl NodeState {
