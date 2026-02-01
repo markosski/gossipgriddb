@@ -1,4 +1,4 @@
-# GossipGridDB 🕸️
+# GossipGridDB 
 
 [![Rust](https://github.com/markosski/gossipgrid/actions/workflows/rust.yml/badge.svg)](https://github.com/markosski/gossipgrid/actions/workflows/rust.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -7,25 +7,26 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 
 ---
 
-## ⚠️ State of the Project
+## State of the Project
 *   **Heavily under development**: APIs and storage formats are subject to change.
 *   **Work in progress**: Partition-aware compute and advanced performance optimizations are still being implemented.
 *   **Not production-ready**: Use for experimental and learning purposes only.
 
-## 🚀 Features
-- [x] **Gossip Protocol**: Decentralized cluster membership management.
-- [x] **Leader/Replica Model**: High availability via data replication.
-- [x] **Durability**: Write-Ahead Log (WAL) ensures data is not lost on crash.
-- [x] **Partitioning**: Efficient data distribution for horizontal scaling.
-- [x] **Rich Querying**: Support for partition and range keys.
-- [x] **Embeddable**: Easily integrate into your Rust applications.
-- [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided).
-- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations.
-- [ ] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
-- [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads.
-- [ ] **WAL Compaction**: Reclaim disk space automatically, improved data recovery performance.
+## Features
+- [x] **Gossip Protocol**: Decentralized cluster membership management
+- [x] **Leader/Replica Model**: High availability via data replication
+- [x] **Read-After-Write?**: Yes, with at least one replica ack
+- [x] **Durability**: Write-Ahead Log (WAL) ensures data is not lost on crash
+- [x] **Partitioning**: Efficient data distribution for horizontal scaling
+- [x] **Rich Querying**: Support for partition and range keys
+- [x] **Embeddable**: Easily integrate into your Rust applications
+- [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided)
+- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations
+- [ ] **Partition-Aware Client**: Direct routing to the correct node for lower latency
+- [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads
+- [ ] **WAL Compaction**: Reclaim disk space automatically, improved data recovery performance
 
-## 🏗️ Architecture
+## Architecture
 
 ```mermaid
 graph TD
@@ -51,7 +52,7 @@ graph TD
     end
 ```
 
-## 📈 Performance Benchmarks
+## Performance Benchmarks
 *Tested on a 3-node cluster, replication=2, partitions=9, c6a.large EC2 instances (EBS GP3 3000 IOPS), test duration - 10s.*
 
 | Operation | Total Ops | Avg Latency | p90 | p95 |
@@ -60,7 +61,7 @@ graph TD
 | **Write (Eventual)** | 36,292 | 686.55µs | 969.7µs | 1.26ms |
 | **Read** | 56,416 | 433.91µs | 705.5µs | 810.91µs |
 
-## 🛠️ Getting Started
+## Getting Started
 
 ### 1. Start a Local Cluster
 You can spin up a 3-node cluster locally using the provided scripts:
@@ -112,7 +113,7 @@ curl -XGET "http://127.0.0.1:3001/items/user_123?fn=sum_amounts"
 curl -XGET http://127.0.0.1:3001/functions
 ```
 
-## 🧪 Testing
+## Testing
 
 ```bash
 # Unit tests
@@ -122,11 +123,11 @@ cargo test --lib
 RUST_LOG=info cargo test --test 'int_tests_*' -- --test-threads=4 --nocapture
 ```
 
-## 📚 Documentation
+## Documentation
 Generate and open the rustdoc documentation:
 ```bash
 cargo doc --no-deps --package gossipgrid --open
 ```
 
-## 📄 License
+## License
 Licensed under [Apache-2.0](http://www.apache.org/licenses/LICENSE-2.0).
