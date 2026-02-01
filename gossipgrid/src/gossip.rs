@@ -101,7 +101,7 @@ impl fmt::Display for GossipMembershipMessage {
             util::DisplayVec(
                 self.other_peers
                     .iter()
-                    .map(|(k, v)| format!("{}:{}", k, v))
+                    .map(|(k, v)| format!("{k}:{v}"))
                     .collect()
             ),
             self.cluster_size,
@@ -120,10 +120,10 @@ pub enum UdpWireMessage {
 impl fmt::Display for UdpWireMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UdpWireMessage::Gossip(msg) => write!(f, "Gossip({})", msg),
-            UdpWireMessage::GossipJoinRequest(msg) => write!(f, "GossipJoinRequest({:?})", msg),
+            UdpWireMessage::Gossip(msg) => write!(f, "Gossip({msg})"),
+            UdpWireMessage::GossipJoinRequest(msg) => write!(f, "GossipJoinRequest({msg:?})"),
             UdpWireMessage::GossipJoinRequestAck(msg) => {
-                write!(f, "GossipJoinRequestAck({:?})", msg)
+                write!(f, "GossipJoinRequestAck({msg:?})")
             }
         }
     }
@@ -791,7 +791,7 @@ pub async fn send_membership_gossip_task(
                         .cluster
                         .other_peers()
                         .iter()
-                        .map(|(k, v)| format!("{}:{}", k, v))
+                        .map(|(k, v)| format!("{k}:{v}"))
                         .collect::<Vec<_>>(),
                 );
                 debug!(

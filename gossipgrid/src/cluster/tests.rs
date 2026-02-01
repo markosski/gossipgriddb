@@ -453,7 +453,7 @@ fn test_next_nodes() {
 #[test]
 fn test_partition_balancing() {
     let config = Cluster::new("test".into(), 3, 0, 6, 2, true);
-    let expected_counts = vec![5, 2, 5];
+    let expected_counts = [5, 2, 5];
     for node_idx in 0..3 {
         let partitions = config.get_assigned_partitions(node_idx).unwrap();
         assert_eq!(partitions.len(), expected_counts[node_idx as usize]);
@@ -1243,7 +1243,7 @@ fn test_cluster_downsize_restriction() {
     // Initial assignment for nodes
     for i in 0..4 {
         let node = SimpleNode {
-            address: NodeAddress::parse_unchecked(&format!("127.0.0.1:400{}", i)),
+            address: NodeAddress::parse_unchecked(&format!("127.0.0.1:400{i}")),
             state: node::SimpleNodeState::Joined,
             web_port: 3000 + i as u16,
             last_seen: 0,
@@ -1260,10 +1260,7 @@ fn test_cluster_downsize_restriction() {
     if let Err(ClusterOperationError::DownsizeError(msg)) = result {
         assert!(msg.contains("no nodes are in Disconnected state"));
     } else {
-        panic!(
-            "Expected ClusterOperationError::DownsizeError, got {:?}",
-            result
-        );
+        panic!("Expected ClusterOperationError::DownsizeError, got {result:?}");
     }
 
     // 2. Disconnect node 3
@@ -1286,9 +1283,6 @@ fn test_cluster_downsize_restriction() {
     if let Err(ClusterOperationError::DownsizeError(msg)) = result {
         assert!(msg.contains("no nodes are in Disconnected state"));
     } else {
-        panic!(
-            "Expected ClusterOperationError::DownsizeError, got {:?}",
-            result
-        );
+        panic!("Expected ClusterOperationError::DownsizeError, got {result:?}");
     }
 }

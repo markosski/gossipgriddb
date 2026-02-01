@@ -11,7 +11,7 @@ impl<T: fmt::Display> fmt::Display for DisplayVec<T> {
                 write!(f, ", ")?;
             }
             // Use the Display implementation of the element T
-            write!(f, "{}", v)?;
+            write!(f, "{v}")?;
         }
         write!(f, "]")
     }
