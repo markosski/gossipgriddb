@@ -21,6 +21,7 @@ use warp::filters::path::FullPath;
 pub enum WebError {
     NodeNotReady(String),
     RequestNotRoutable,
+    PartitionLocked(String),
 }
 impl warp::reject::Reject for WebError {}
 

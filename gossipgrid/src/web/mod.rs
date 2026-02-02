@@ -82,6 +82,9 @@ async fn decide_routing(
     if let Some(this_node) = memory_read.as_joined_node() {
         let this_node_addr = this_node.get_address().clone();
 
+        // Calculate the partition ID for this key
+        let partition_id = PartitionId(this_node.cluster.hash_key(partition_key.value()).0);
+
         let leader_candidate = this_node
             .cluster
             .find_leader_for_partition(partition_key.value());
@@ -91,11 +94,29 @@ async fn decide_routing(
             .find_replica_for_partition(partition_key.value());
 
         let route_target = if matches!(method, &Method::POST | &Method::DELETE) {
+            // For writes: check if partition is locked before routing locally
+            if leader_candidate
+                .as_ref()
+                .map(|dest| dest.address == this_node_addr)
+                .unwrap_or(false)
+            {
+                // We are the leader, check if partition is locked
+                if this_node.cluster.is_partition_locked(partition_id) {
+                    return Err(ItemOpsResponseEnvelope {
+                        success: None,
+                        error: Some(format!(
+                            "Partition {} is locked during leadership transition. Retry after handshake completes.",
+                            partition_id.0
+                        )),
+                    });
+                }
+            }
             // All write operations should go to leader
             leader_candidate
         } else if matches!(method, &Method::GET) {
             // All read operations should go to leader first, unless there is no leader, go to replica
             // This configuration ensures read-after-write consistency
+            // Reads are allowed even when partition is locked
             leader_candidate.or(replica_candidate)
         } else {
             None
