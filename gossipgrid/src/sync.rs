@@ -921,6 +921,7 @@ mod tests {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         cluster.assign_node(&1, &node1).unwrap();
         cluster.partition_leaders.insert(p1, 1);
@@ -990,6 +991,7 @@ mod tests {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         let node2 = SimpleNode {
             address: NodeAddress::new("127.0.0.1".to_string(), 8002),
@@ -999,6 +1001,7 @@ mod tests {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         cluster.assign_node(&1, &node1).unwrap();
         cluster.assign_node(&2, &node2).unwrap();

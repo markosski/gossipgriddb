@@ -60,6 +60,7 @@ fn test_assign_node() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     let result = cluster_config.assign_node(&0, &node);
     assert!(result.is_ok());
@@ -88,6 +89,7 @@ fn test_is_fully_assigned() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     let node_2: SimpleNode = SimpleNode {
         address: NodeAddress::parse_unchecked("127.0.0.1:4110"),
@@ -97,6 +99,7 @@ fn test_is_fully_assigned() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     let node_3: SimpleNode = SimpleNode {
         address: NodeAddress::parse_unchecked("127.0.0.1:4111"),
@@ -106,6 +109,7 @@ fn test_is_fully_assigned() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     cluster_config.assign_node(&0, &node_1).unwrap();
     cluster_config.assign_node(&1, &node_2).unwrap();
@@ -130,6 +134,7 @@ fn test_leadership_all_assigned_lowest_index() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -144,6 +149,7 @@ fn test_leadership_all_assigned_lowest_index() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -158,6 +164,7 @@ fn test_leadership_all_assigned_lowest_index() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -188,6 +195,7 @@ fn test_leadership_node_0_disconnected() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -202,6 +210,7 @@ fn test_leadership_node_0_disconnected() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -216,6 +225,7 @@ fn test_leadership_node_0_disconnected() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -242,6 +252,7 @@ fn test_leadership_node_0_unassigned() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -256,6 +267,7 @@ fn test_leadership_node_0_unassigned() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -282,6 +294,7 @@ fn test_leadership_sticky() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -297,6 +310,7 @@ fn test_leadership_sticky() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -322,6 +336,7 @@ fn test_leadership_sticky() {
                 hlc: HLC::default(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: vec![],
+            locked_partitions: Default::default(),
             },
         )
         .unwrap();
@@ -353,6 +368,7 @@ fn test_next_node() {
                     hlc: HLC::default(),
                     partition_item_counts: HashMap::new(),
                     leading_partitions: vec![],
+            locked_partitions: Default::default(),
                 })
                 .unwrap();
             joined
@@ -365,6 +381,7 @@ fn test_next_node() {
                     hlc: HLC::default(),
                     partition_item_counts: HashMap::new(),
                     leading_partitions: vec![],
+            locked_partitions: Default::default(),
                 })
                 .unwrap();
             joined
@@ -377,6 +394,7 @@ fn test_next_node() {
                     hlc: HLC::default(),
                     partition_item_counts: HashMap::new(),
                     leading_partitions: vec![],
+            locked_partitions: Default::default(),
                 })
                 .unwrap();
 
@@ -415,6 +433,7 @@ fn test_next_nodes() {
                     hlc: HLC::default(),
                     partition_item_counts: HashMap::new(),
                     leading_partitions: vec![],
+            locked_partitions: Default::default(),
                 })
                 .unwrap();
             joined
@@ -427,6 +446,7 @@ fn test_next_nodes() {
                     hlc: HLC::default(),
                     partition_item_counts: HashMap::new(),
                     leading_partitions: vec![],
+            locked_partitions: Default::default(),
                 })
                 .unwrap();
 
@@ -481,6 +501,7 @@ fn test_hlc_ordering_with_clock_drift() {
         hlc: newer_hlc.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     let node_1_disconnected_stale = SimpleNode {
@@ -491,6 +512,7 @@ fn test_hlc_ordering_with_clock_drift() {
         hlc: older_hlc.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     let from_2: NodeAddress = NodeAddress::parse_unchecked("127.0.0.1:4002");
@@ -505,6 +527,7 @@ fn test_hlc_ordering_with_clock_drift() {
         },
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     config.assign_node(&1, &node_1_joined).unwrap();
@@ -538,6 +561,7 @@ fn test_hlc_ordering_with_clock_drift() {
         hlc: newer_hlc_2.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     peers.insert(1, node_1_joined_newer.clone());
     let current_size = config.cluster_size;
@@ -563,6 +587,7 @@ fn test_hlc_ordering_with_clock_drift() {
         hlc: authoritative_hlc.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     peers.insert(1, node_1_disconnected_authoritative);
     let current_size = config.cluster_size;
@@ -605,6 +630,7 @@ fn test_leadership_merge_gossip() {
         hlc: hlc_0.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     let node_1 = SimpleNode {
         address: from_1.clone(),
@@ -614,6 +640,7 @@ fn test_leadership_merge_gossip() {
         hlc: hlc_1.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![PartitionId(0)],
+            locked_partitions: Default::default(),
     };
     let node_2 = SimpleNode {
         address: from_2.clone(),
@@ -623,6 +650,7 @@ fn test_leadership_merge_gossip() {
         hlc: hlc_2.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![PartitionId(0)],
+            locked_partitions: Default::default(),
     };
 
     config.assign_node(&0, &node_0).unwrap();
@@ -677,6 +705,7 @@ fn test_duplicate_leading_partitions() {
         hlc: HLC::new(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config.assign_node(&0, &node).unwrap();
     config.partition_leaders.clear();
@@ -710,6 +739,7 @@ fn test_node_state_unification() {
         hlc: hlc.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     let assignment: AssignmentState = (&snode_syncing).into();
@@ -723,6 +753,7 @@ fn test_node_state_unification() {
         hlc: hlc.clone(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     let assignment: AssignmentState = (&snode_joined).into();
@@ -744,6 +775,7 @@ fn test_syncing_node_leadership() {
         },
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config.assign_node(&1, &node1).unwrap();
 
@@ -772,6 +804,7 @@ fn test_syncing_node_leadership() {
         },
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config.assign_node(&0, &node0).unwrap();
 
@@ -803,6 +836,7 @@ fn test_leader_election_distribution_balance() {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         config.assign_node(&i, &node).unwrap();
     }
@@ -835,6 +869,7 @@ fn test_cluster_resize() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config.assign_node(&0, &node_0).unwrap();
     assert!(matches!(
@@ -874,6 +909,7 @@ fn test_cluster_resize() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config.assign_node(&2, &node_2).unwrap();
 
@@ -903,6 +939,7 @@ fn test_leader_election_distribution_on_node_failure() {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         config.assign_node(&i, &node).unwrap();
     }
@@ -948,6 +985,7 @@ fn test_leader_election_distribution_on_rejoin() {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         config.assign_node(&i, &node).unwrap();
     }
@@ -984,6 +1022,7 @@ fn test_leader_election_distribution_on_rejoin() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config.assign_node(&0, &node0).unwrap();
     config.assign_partition_leaders();
@@ -1085,6 +1124,7 @@ fn test_leadership_change_detection() {
         hlc: HLC::new(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     let node1 = SimpleNode {
         address: NodeAddress::parse_unchecked("127.0.0.1:4001"),
@@ -1094,6 +1134,7 @@ fn test_leadership_change_detection() {
         hlc: HLC::new(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     // First assignment - will elect node 0 as leader for P0
@@ -1130,6 +1171,7 @@ fn test_cluster_resize_overwrite_bug() {
         hlc: HLC::default(),
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     // 1. Simulate a resize on the local node
@@ -1171,6 +1213,7 @@ fn test_config_hlc_blocks_node_updates_repro() {
         },
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
     config_a.assign_node(&2, &node_c_initial).unwrap();
 
@@ -1189,6 +1232,7 @@ fn test_config_hlc_blocks_node_updates_repro() {
         }, // Newer HLC
         partition_item_counts: partition_item_counts_fresh,
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     let mut other_peers_b = HashMap::new();
@@ -1205,6 +1249,7 @@ fn test_config_hlc_blocks_node_updates_repro() {
         },
         partition_item_counts: HashMap::new(),
         leading_partitions: vec![],
+            locked_partitions: Default::default(),
     };
 
     // Stale config HLC from Node B
@@ -1250,6 +1295,7 @@ fn test_cluster_downsize_restriction() {
             hlc: HLC::default(),
             partition_item_counts: HashMap::new(),
             leading_partitions: vec![],
+            locked_partitions: Default::default(),
         };
         config.assign_node(&i, &node).unwrap();
     }
@@ -1285,4 +1331,49 @@ fn test_cluster_downsize_restriction() {
     } else {
         panic!("Expected ClusterOperationError::DownsizeError, got {result:?}");
     }
+}
+// Tests for partition lock helper methods (Section 2 of tasks.md)
+
+#[test]
+fn test_has_locked_partitions_empty() {
+    let config = Cluster::new("test".into(), 3, 0, 6, 2, true);
+    // No nodes assigned yet, should return false
+    assert!(!config.has_locked_partitions());
+}
+
+#[test]
+fn test_has_locked_partitions_with_nodes_no_locks() {
+    let mut config = Cluster::new("test".into(), 3, 0, 6, 2, true);
+
+    let node = SimpleNode {
+        address: NodeAddress::parse_unchecked("127.0.0.1:4109"),
+        state: SimpleNodeState::Joined,
+        web_port: 3001,
+        last_seen: 0,
+        hlc: HLC::default(),
+        partition_item_counts: HashMap::new(),
+        leading_partitions: vec![],
+        locked_partitions: Default::default(),
+    };
+    config.assign_node(&0, &node).unwrap();
+
+    // Node assigned but no locks, should return false
+    assert!(!config.has_locked_partitions());
+}
+
+#[test]
+fn test_is_partition_locked_none() {
+    let config = Cluster::new("test".into(), 3, 0, 6, 2, true);
+    // TODO: Will properly test once lock propagation is implemented
+    assert!(!config.is_partition_locked(PartitionId(0)));
+}
+
+#[test]
+fn test_get_nodes_with_locked_partition_empty() {
+    let config = Cluster::new("test".into(), 3, 0, 6, 2, true);
+    // TODO: Will properly test once lock propagation is implemented
+    assert_eq!(
+        config.get_nodes_with_locked_partition(PartitionId(0)),
+        Vec::<NodeId>::new()
+    );
 }

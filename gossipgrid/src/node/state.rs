@@ -95,20 +95,25 @@ pub struct SimpleNode {
     pub hlc: HLC,
     pub partition_item_counts: HashMap<PartitionId, usize>,
     pub leading_partitions: Vec<PartitionId>,
+    /// Partitions currently locked during leadership transitions.
+    /// A partition in this set indicates the node has suspended write operations for it.
+    #[bincode(with_serde)]
+    pub locked_partitions: std::collections::HashSet<PartitionId>,
 }
 
 impl fmt::Display for SimpleNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "SimpleNode {{ address: {}, state: {:?}, web_port: {}, last_seen: {}, hlc: {:?}, partition_item_counts sum: {}, leading_partitions count: {} }}",
+            "SimpleNode {{ address: {}, state: {:?}, web_port: {}, last_seen: {}, hlc: {:?}, partition_item_counts sum: {}, leading_partitions count: {}, locked_partitions: {:?} }}",
             self.address,
             self.state,
             self.web_port,
             self.last_seen,
             self.hlc,
             self.partition_item_counts.values().sum::<usize>(),
-            self.leading_partitions.len()
+            self.leading_partitions.len(),
+            self.locked_partitions,
         )
     }
 }
@@ -266,6 +271,7 @@ impl NodeState {
                 hlc: node.node_hlc.clone(),
                 partition_item_counts: HashMap::new(),
                 leading_partitions: Vec::new(),
+                locked_partitions: std::collections::HashSet::new(),
             }),
         }
     }
@@ -287,6 +293,7 @@ impl PreJoinNode {
             hlc: self.node_hlc.clone(),
             partition_item_counts: HashMap::new(), // PreJoin node has no item counts yet
             leading_partitions: Vec::new(),
+            locked_partitions: std::collections::HashSet::new(),
         }
     }
 
@@ -374,6 +381,7 @@ impl JoinedNode {
                 .map(|c| c.clone())
                 .unwrap_or_default(),
             leading_partitions,
+            locked_partitions: std::collections::HashSet::new(), // TODO: Load from persistent state in future tasks
         }
     }
 

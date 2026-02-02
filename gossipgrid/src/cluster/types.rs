@@ -93,6 +93,7 @@ impl From<&AssignmentState> for Option<SimpleNode> {
                 hlc: node.hlc.clone(),
                 partition_item_counts: node.partition_item_counts.clone(),
                 leading_partitions: Default::default(),
+                locked_partitions: Default::default(),
             }),
             AssignmentState::JoinedSyncing { node } => Some(SimpleNode {
                 address: node.address.clone(),
@@ -102,6 +103,7 @@ impl From<&AssignmentState> for Option<SimpleNode> {
                 hlc: node.hlc.clone(),
                 partition_item_counts: node.partition_item_counts.clone(),
                 leading_partitions: Default::default(),
+                locked_partitions: Default::default(),
             }),
             AssignmentState::Joined { node } => Some(SimpleNode {
                 address: node.address.clone(),
@@ -111,6 +113,7 @@ impl From<&AssignmentState> for Option<SimpleNode> {
                 hlc: node.hlc.clone(),
                 partition_item_counts: node.partition_item_counts.clone(),
                 leading_partitions: Default::default(),
+                locked_partitions: Default::default(),
             }),
             AssignmentState::Disconnected { node } => Some(SimpleNode {
                 address: node.address.clone(),
@@ -120,6 +123,7 @@ impl From<&AssignmentState> for Option<SimpleNode> {
                 hlc: node.hlc.clone(),
                 partition_item_counts: node.partition_item_counts.clone(),
                 leading_partitions: Default::default(),
+                locked_partitions: Default::default(),
             }),
         }
     }

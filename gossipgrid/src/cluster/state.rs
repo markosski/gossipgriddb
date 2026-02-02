@@ -695,4 +695,37 @@ impl Cluster {
         }
         None
     }
+
+    /// Check if any node in the cluster has non-empty locked_partitions.
+    /// Used to prevent concurrent resize operations during leadership transitions.
+    pub fn has_locked_partitions(&self) -> bool {
+        for (_node_index, (_, assignment)) in &self.partition_assignments {
+            match assignment {
+                AssignmentState::Joined { node }
+                | AssignmentState::JoinedSyncing { node }
+                | AssignmentState::JoinedHydrating { node }
+                | AssignmentState::Disconnected { node } => {
+                    // Note: locked_partitions is not directly on AssignmentNode,
+                    // it's gossiped via SimpleNode. For now, return false as this
+                    // will be properly implemented when we add lock initiation logic.
+                    // This is a placeholder for task 3.2.
+                    let _ = node; // Suppress unused warning
+                }
+                AssignmentState::Unassigned => {}
+            }
+        }
+        false // TODO: Implement once locked_partitions is propagated through gossip
+    }
+
+    /// Check if a specific partition is locked on any node in the cluster.
+    pub fn is_partition_locked(&self, _partition: PartitionId) -> bool {
+        // TODO: Implement once locked_partitions is properly propagated
+        false
+    }
+
+    /// Get list of nodes that have a specific partition locked.
+    pub fn get_nodes_with_locked_partition(&self, _partition: PartitionId) -> Vec<NodeId> {
+        // TODO: Implement once locked_partitions is properly propagated
+        Vec::new()
+    }
 }

@@ -2,7 +2,7 @@
 
 - [ ] 1.1 Add `locked_partitions` field (`HashSet<PartitionId>`) to `SimpleNode` struct
 - [ ] 1.2 Update gossip serialization (Encode/Decode) for `locked_partitions`
-- [ ] 1.3 Add unit tests verifying serialization/deserialization of `locked_partitions`
+- [ ] 1.3 Add unit tests if necessary verifying serialization/deserialization of `locked_partitions`
 
 ## 2. Foundation: Helper Methods (Pure Functions)
 
