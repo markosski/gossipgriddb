@@ -11,6 +11,7 @@ During cluster resizing, a new node might claim leadership of partitions that th
   2. Old leader sees the lock, stops serving local writes, and adds the partition to its own `locked_partitions`.
   3. New leader sees the acknowledgment (old leader's lock), removes the partition from its `locked_partitions`, and begins serving writes.
 - Ensure reads remain available even when a partition is `LOCKED`.
+- Prevent concurrent resize operations by rejecting resize requests when any partition lock handshake is in progress.
 
 ## Non-Goals
 
