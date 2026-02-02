@@ -28,7 +28,9 @@ pub enum ClusterHealth {
     Unhealthy,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Serialize, Deserialize,
+)]
 pub struct PartitionId(pub u16);
 
 impl PartitionId {

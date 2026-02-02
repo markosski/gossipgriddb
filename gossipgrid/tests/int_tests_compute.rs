@@ -30,13 +30,16 @@ async fn test_compute_sum_with_registered_function() {
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Register a function manually (simulating config load)
-    let env1 = nodes[0].2.clone();
-    env1.get_function_registry()
-        .register(
-            "sum_values".to_string(),
-            "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum".to_string(),
-        )
-        .unwrap();
+    for node in &nodes {
+        let env = node.2.clone();
+        env.get_function_registry()
+            .register(
+                "sum_values".to_string(),
+                "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum"
+                    .to_string(),
+            )
+            .unwrap();
+    }
 
     // List functions to verify registration
     let res = client
@@ -58,16 +61,22 @@ async fn test_compute_sum_with_registered_function() {
 
     assert!(res.status().is_success());
 
+    let response_text = res.text().await.unwrap();
     let response: ItemGenericResponseEnvelope =
-        serde_json::from_str(res.text().await.unwrap().as_str()).unwrap();
+        serde_json::from_str(response_text.as_str()).unwrap();
+
+    if let Some(err) = &response.error {
+        panic!("Compute failed: {}", err);
+    }
 
     let result = response
         .success
-        .unwrap()
+        .as_ref()
+        .expect("Response success should be present")
         .get("result")
-        .unwrap()
+        .expect("Result field should be present")
         .as_f64()
-        .unwrap();
+        .expect("Result should be a number");
     assert_eq!(result, 30.0);
 
     helpers::stop_nodes(nodes.into_iter().map(|n| n.0).collect()).await;

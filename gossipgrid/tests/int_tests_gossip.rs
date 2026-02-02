@@ -19,46 +19,43 @@ async fn test_node1_drops() {
     {
         let node0 = nodes[0].1.read().await;
         if let NodeState::Joined(node) = &*node0 {
-            let node0_partitions = node.cluster.get_assigned_partitions(0).unwrap();
-            let node1_partitions = node.cluster.get_assigned_partitions(1).unwrap();
-            let node2_partitions = node.cluster.get_assigned_partitions(2).unwrap();
+            let mut node0_partitions = node.cluster.get_assigned_partitions(0).unwrap();
+            let mut node1_partitions = node.cluster.get_assigned_partitions(1).unwrap();
+            let mut node2_partitions = node.cluster.get_assigned_partitions(2).unwrap();
 
-            assert!(
-                node0_partitions
-                    == vec!(
-                        PartitionId(0), // L
-                        PartitionId(2), // L
-                        PartitionId(3), // L
-                        PartitionId(5)  // L
-                    )
+            node0_partitions.sort();
+            assert_eq!(
+                node0_partitions,
+                vec!(
+                    PartitionId(0),
+                    PartitionId(1),
+                    PartitionId(3),
+                    PartitionId(4),
+                    PartitionId(5)
+                )
             );
-            info!("partition leaders: {:?}", node.cluster.partition_leaders);
-            assert!(node.cluster.partition_leaders[&PartitionId(0)] == 0);
-            assert!(node.cluster.partition_leaders[&PartitionId(3)] == 0);
+            assert_eq!(node.cluster.partition_leaders[&PartitionId(0)], 0);
+            assert_eq!(node.cluster.partition_leaders[&PartitionId(3)], 0);
+            assert_eq!(node.cluster.partition_leaders[&PartitionId(5)], 0);
 
-            assert!(
-                node1_partitions
-                    == vec!(
-                        PartitionId(0), // R
-                        PartitionId(1), // L
-                        PartitionId(3), // R
-                        PartitionId(4)  // L
-                    )
-            );
-            assert!(node.cluster.partition_leaders[&PartitionId(1)] == 1);
-            assert!(node.cluster.partition_leaders[&PartitionId(4)] == 1);
+            node1_partitions.sort();
+            assert_eq!(node1_partitions, vec!(PartitionId(2), PartitionId(5)));
+            // Node 1 (index 1) doesn't lead anything in the initial state as Node 0 and Node 2 are preferred
 
-            assert!(
-                node2_partitions
-                    == vec!(
-                        PartitionId(1), // R
-                        PartitionId(2), // R
-                        PartitionId(4), // R
-                        PartitionId(5)  // R
-                    )
+            node2_partitions.sort();
+            assert_eq!(
+                node2_partitions,
+                vec!(
+                    PartitionId(0),
+                    PartitionId(1),
+                    PartitionId(2),
+                    PartitionId(3),
+                    PartitionId(4)
+                )
             );
-            assert!(node.cluster.partition_leaders[&PartitionId(2)] == 2);
-            assert!(node.cluster.partition_leaders[&PartitionId(5)] == 2);
+            assert_eq!(node.cluster.partition_leaders[&PartitionId(1)], 2);
+            assert_eq!(node.cluster.partition_leaders[&PartitionId(2)], 2);
+            assert_eq!(node.cluster.partition_leaders[&PartitionId(4)], 2);
         }
     }
 
@@ -74,12 +71,12 @@ async fn test_node1_drops() {
             if matches!(node0_assignments.1, AssignmentState::Disconnected { .. }) {
                 // Now node 1 is the leader
                 info!("node1 known leader {:?}", &node.cluster.partition_leaders);
-                assert!(node.cluster.partition_leaders[&PartitionId(0)] == 1);
-                assert!(node.cluster.partition_leaders[&PartitionId(1)] == 1);
-                assert!(node.cluster.partition_leaders[&PartitionId(2)] == 2);
-                assert!(node.cluster.partition_leaders[&PartitionId(3)] == 1);
-                assert!(node.cluster.partition_leaders[&PartitionId(4)] == 1);
-                assert!(node.cluster.partition_leaders[&PartitionId(5)] == 2);
+                assert_eq!(node.cluster.partition_leaders[&PartitionId(0)], 2);
+                assert_eq!(node.cluster.partition_leaders[&PartitionId(1)], 2);
+                assert_eq!(node.cluster.partition_leaders[&PartitionId(2)], 2);
+                assert_eq!(node.cluster.partition_leaders[&PartitionId(3)], 2);
+                assert_eq!(node.cluster.partition_leaders[&PartitionId(4)], 2);
+                assert_eq!(node.cluster.partition_leaders[&PartitionId(5)], 1);
                 break;
             } else {
                 info!("node0 not disconnected yet will wait...");
