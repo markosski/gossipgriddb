@@ -1,4 +1,4 @@
-use crate::cluster::{AssignmentState, PartitionId};
+use crate::cluster::{AssignmentState, ClusterOperationError, PartitionId};
 use crate::node::NodeState;
 use crate::web::items::WebError;
 use serde::{Deserialize, Serialize};
@@ -74,12 +74,30 @@ pub async fn handle_resize_cluster(
                     warp::http::StatusCode::OK,
                 ))
             }
-            Err(e) => Ok(warp::reply::with_status(
-                warp::reply::json(
-                    &serde_json::json!({"status": "error", "message": e.to_string()}),
-                ),
-                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            )),
+            Err(e) => {
+                // Return appropriate HTTP status code based on error type
+                let status_code = match &e {
+                    ClusterOperationError::ResizeInProgress(_) => {
+                        // 503 Service Unavailable: operation can be retried later
+                        warp::http::StatusCode::SERVICE_UNAVAILABLE
+                    }
+                    ClusterOperationError::DownsizeError(_) => {
+                        // 400 Bad Request: invalid operation (downsize without disconnected nodes)
+                        warp::http::StatusCode::BAD_REQUEST
+                    }
+                    _ => {
+                        // 500 Internal Server Error: unexpected errors
+                        warp::http::StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                };
+
+                Ok(warp::reply::with_status(
+                    warp::reply::json(
+                        &serde_json::json!({"status": "error", "message": e.to_string()}),
+                    ),
+                    status_code,
+                ))
+            }
         }
     } else {
         Err(warp::reject::custom(WebError::NodeNotReady(

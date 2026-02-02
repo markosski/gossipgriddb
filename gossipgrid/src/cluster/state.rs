@@ -327,6 +327,13 @@ impl Cluster {
             return Ok(());
         }
 
+        // Prevent resize if any partition handshake is in progress
+        if self.has_locked_partitions() {
+            return Err(ClusterOperationError::ResizeInProgress(
+                "Cannot resize: partition leadership handshake in progress".to_string(),
+            ));
+        }
+
         if new_size < self.cluster_size {
             let disconnected_nodes = self
                 .partition_assignments

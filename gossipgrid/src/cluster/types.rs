@@ -19,6 +19,8 @@ pub enum ClusterOperationError {
     ClusterStateChangeError(String),
     #[error("Cannot downsize cluster: {0}")]
     DownsizeError(String),
+    #[error("Resize operation in progress: {0}")]
+    ResizeInProgress(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
