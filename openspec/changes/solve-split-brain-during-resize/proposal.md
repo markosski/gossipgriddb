@@ -1,37 +1,30 @@
 ## Why
 
-During cluster resizing, a new node might claim leadership of partitions that the previous leader still considers itself responsible for until the cluster configuration converges. This leads to a split-brain scenario where multiple nodes accept writes for the same partition, causing data inconsistency.
+Cluster resizing currently suffers from a "split-brain" window where ownership is ambiguous. The previous "Locking" proposal solved this but introduced downtime (503 errors). This new proposal introduces **Live Partition Migration** to ensure zero-downtime resizing by dynamically forwarding requests during data transfer.
 
 ## What Changes
 
-- Introduce a `locked_partitions` set for each node.
-- **BREAKING**: Modify the write path to reject writes when a partition is in the local `locked_partitions` set.
-- Implement a symmetrical lock handshake during cluster resizing:
-  1. New leader adds partition to `locked_partitions` and gossips.
-  2. Old leader sees the lock, stops serving local writes, and adds the partition to its own `locked_partitions`.
-  3. New leader sees the acknowledgment (old leader's lock), removes the partition from its `locked_partitions`, and begins serving writes.
-- Ensure reads remain available even when a partition is `LOCKED`.
-- Prevent concurrent resize operations by rejecting resize requests when any partition lock handshake is in progress.
-
-## Non-Goals
-
-- Implementation of a centralized consensus protocol (e.g., Raft).
-- Structural changes to the underlying storage engines.
-- Atomic multi-partition locking across node boundaries.
-- Immediate strong consistency for reads during the lock window.
+- **New Node States**:
+    - `importing_partitions` (on new owner)
+    - `migrating_partitions` (on old owner)
+- **Live Migration Protocol**:
+    - Old owner keeps serving requests while data creates background.
+    - Requests for *already migrated keys* are forwarded to the new owner.
+    - Requests for *not-yet-migrated keys* are served locally.
+- **Topological Handshake**:
+    - Nodes use gossip to coordinate the start and end of migration.
 
 ## Capabilities
 
 ### New Capabilities
-- `partition-locking`: Mechanism to manage and gossip a `locked_partitions` set to coordinate leadership transitions.
+- `live-migration`: Seamless data movement between nodes.
+- `request-forwarding`: Internal proxying or redirection for migrated keys.
 
 ### Modified Capabilities
-- `cluster-resizing`: Update the resizing workflow to incorporate the lock handshake before finalizing the transition.
-- `write-availability`: Add checks for `locked_partitions` before allowing write operations.
+- `cluster-resizing`: Now triggers migration instead of instant switch.
 
 ## Impact
 
-- **Storage Layer**: Needs to track `locked_partitions`.
-- **Gossip Protocol**: Must carry `locked_partitions` in metadata.
-- **Web/API**: Write endpoints must return 503 errors when `LOCKED`.
-- **Internal Cluster Logic**: The recalculation of leadership will trigger the locking phase.
+- **Storage Layer**: Support for iterating keys and marking migration status.
+- **Network**: New bandwidth usage for sync; increased latency for forwarded requests.
+- **Availability**: Writes remain available throughout the process.

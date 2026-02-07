@@ -1,58 +1,105 @@
 ## Context
 
-The current `gossipgrid` implementation supports dynamic cluster resizing. However, when a new node joins and becomes a leader for partitions previously owned by another node, there is a period of convergence where both nodes may believe they are the leader. This "split-brain" window allows for inconsistent writes.
+The current `gossipgrid` implementation supports dynamic cluster resizing. However, when a new node joins and assumes leadership for partitions, there is a period of convergence where the old leader still holds data and serves requests while the new leader is technically responsible. This can lead to split-brain scenarios and data inconsistency if not handled carefully.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Eliminate the split-brain window during partition leadership transitions.
-- Maintain read availability even when write operations are suspended.
+- Eliminate split-brain scenarios during partition leadership transitions.
+- **Maintain high write availability** during the transition (Live Migration).
+- Ensure data consistency by forwarding requests for migrated keys to the new owner.
 - Leverage the existing gossip protocol for coordination.
-- Ensure the new leader waits for old leader to acknowledge the lock before opening.
 
 **Non-Goals:**
 - Implementation of a centralized consensus protocol (e.g., Raft).
-- Structural changes to the underlying storage engines.
-- Atomic multi-partition locking.
+- Shared storage architecture (GossipGridDB is shared-nothing).
+- Atomic multi-partition transactions across nodes.
 
 ## Decisions
 
-### 1. Partition Lock Set in SimpleNode
-Each node will advertise a `locked_partitions` set in its `SimpleNode` gossip data.
-- **`locked_partitions`**: A set of Partition IDs that this node has currently suspended write operations for.
+### 1. Partition States
+Nodes will track two new sets of partitions in their metadata:
+- **`importing_partitions`** (Target Node): Partitions the node is currently receiving data for.
+- **`migrating_partitions`** (Source Node): Partitions the node is currently sending data from.
 
-### 2. Symmetrical Lock Handshake
-The transition of leadership for partition $P$ to Node $B$ (new leader) uses the `locked_partitions` set as a cluster-wide signal:
+### 2. Migration Handshake Protocol
+The transition of leadership for partition $P$ from Node $A$ (Source) to Node $B$ (Target) follows this sequence:
 
-1. **Lock Initiation (B)**: Node $B$ identifies it is the new leader for $P$. It adds $P$ to its local `locked_partitions` and gossips this state. Node $B$ rejects writes for $P$.
-2. **Acknowledgment (All Nodes)**: Every other node $N$ receives gossip showing `B.locked_partitions` contains $P$. 
-   - Node $N$ immediately stops accepting writes for $P$ (if it previously considered itself a leader).
-   - Node $N$ adds $P$ to its own local `locked_partitions` and gossips.
-3. **Opening (B)**: Node $B$ receives gossip from all healthy nodes in the cluster showing they have $P$ in their `locked_partitions`.
-   - Node $B$ now has proof that no other node will accept writes for $P$.
-   - Node $B$ removes $P$ from its `locked_partitions` and begins serving writes.
-4. **Cleanup (All Nodes)**: Other nodes see $P$ is no longer in `B.locked_partitions`. They remove $P$ from their own `locked_partitions`.
+1.  **Topology Calculation (Target)**: Node $B$ joins or resizes. It calculates that it *should* own partition $P$.
+    -   $B$ adds $P$ to its `leading_partitions` (intent).
+    -   $B$ adds $P$ to its `importing_partitions` (status).
+    -   $B$ calculates topology but does *not* immediately serve writes as the sole authority until migration completes.
+2.  **Acknowledgment (Source)**: Node $A$ (current leader of $P$) receives gossip from $B$.
+    -   $A$ sees $B$ is importing $P$.
+    -   $A$ marks $P$ as a `migrating_partition`.
+    -   $A$ remains the *effective* leader for clients but enters "Migration Mode" for $P$.
+3.  **Dual Write (Hot Standby)**:
+    -   While in `migrating` state, the Source node **continues to accept writes**.
+    -   It applies writes **locally** (updating its storage).
+    -   It **concurrently forwards** the write to the Target node.
+    -   This ensures that if the Target fails, the Source has the latest data and can seamlessly revert to exclusive ownership.
+4.  **Background Sync (Finite Iterator)**:
+    -   Source initiates a **Store Snapshot Scan** (iterating the in-memory map or storage engine directly), NOT the WAL.
+    -   **Termination Condition**: The scan iterates the current key set **exactly once** (Finite Iterator). It does not retry or loop for new writes.
+    -   New writes during the scan are handled by the Dual Write mechanism.
+    -   Once the iterator finishes, the partition is fully synced.
+5.  **Completion**:
+    -   Source sends "Sync Complete" signal.
+    -   Target promotes partition to "Owned", removes `importing`.
+    -   Source sees Target is no longer `importing`, removes `migrating`, and drops ownership (deleting local data).
 
-### 3. Dead Node Recovery (Force Unlock)
-If Node $A$ (old leader) is marked as `Disconnected` in the gossip view, or if the cluster configuration indicates that Node $B$ is the only healthy candidate for leadership of $P$, Node $B$ can immediately transition $P$ to `OPEN`.
-- **Rationale**: Prevents partitions from being stuck in `LOCKED` if the old leader crashes, or if Node $A$ has already gracefully surrendered leadership without a symmetrical lock (e.g., during a multi-step reconfiguration).
+### 3. Request Routing (Smart Forwarding)
+During the migration window (Phase 2 & 3), Node $A$ handles requests for $P$:
 
-### 4. Distributed Partition Reassignment
-All nodes independently run the same deterministic `assign_partition_leaders()` algorithm when topology changes occur (node join, disconnect, resize). There is no single coordinator node.
-- **Deterministic Algorithm**: Uses rendezvous hashing with circular distance priority to ensure all nodes converge to the same leadership assignments.
-- **Eventual Consistency**: Nodes converge through gossip propagation (~10 seconds for failure detection).
+-   **Write Request**: Apply Dual Write (Local + Forward).
+-   **Read Request**: Serve locally (since Source has full data until completion).
 
-### 5. Concurrent Resize Prevention
-To prevent complex multi-way handshake scenarios, `Cluster::resize()` will reject resize operations if any partition lock handshake is currently in progress.
-- **Detection**: Check if any node has non-empty `locked_partitions` before proceeding with resize.
-- **Error**: Return `ResizeInProgress` error to client, allowing retry after handshake completes.
-- **Rationale**: Simplifies reasoning about handshake state and prevents cascading leadership changes.
+### 4. Safety & Failure Recovery (Revised with Replica C Analysis)
+
+We evaluated two options for handling node failures during migration:
+1.  **Option 1 (Dual Write - Chosen)**: Source handles all writes locally + forwards. Replica follows Source.
+2.  **Option 2 (Dual Replication)**: Replica syncs from both Source and Target.
+
+**Conclusion**: Option 1 is superior for simplicity and robustness. It ensures the Source (and its Replica) maintain a complete dataset until handoff, covering all single-node failure scenarios.
+
+#### Scenario 1: Target Failure (Node B dies)
+-   **Mechanism**: Source (A) writes locally, replicates to Replica (C), and forwards to Target (B).
+-   **Failure**: Target (B) crashes mid-migration.
+-   **Recovery**: Source (A) detects failure and cancels migration.
+-   **Outcome**: Source (A) and Replica (C) both hold the complete dataset (Legacy + New Writes). **Zero Data Loss**.
+
+#### Scenario 2: Source Failure (Node A dies)
+-   **Mechanism**: Source (A) writes locally and replicates to Replica (C).
+-   **Failure**: Source (A) crashes.
+-   **Recovery**: Replica (C) detects failure and promotes itself to Leader of *Partition P*.
+-   **Migration State**: Since C has full state (from A's replication stream), C simply restarts the migration to Target (B) from scratch (or resumes if state is persisted).
+-   **Outcome**: Replica (C) holds the complete dataset. **Zero Data Loss**.
+
+#### Scenario 3: Source & Replica Failure (Double Fault)
+-   **Failure**: A and C both crash.
+-   **Outcome**: Target (B) has partial data (New writes + Partial Backfill).
+-   **Result**: Potential data loss (Legacy data lost). This is standard behavior for double-faults in single-replica systems.
+
+### 5. Infinite Loop Prevention
+-   **Finite Iterator Scan**: Migration time is proportional to dataset size, not traffic volume. The background sync iterates the snapshot once. New writes are handled by Dual Write.
+
+### 3. Request Routing (Smart Forwarding)
+During the migration window (Phase 2 & 3), Node $A$ handles requests for $P$:
+
+-   **Write/Read Request for Key $K$**:
+    -   $A$ checks if $K$ is in the "migrated set".
+    -   **If Migrated**: Forward request to Node $B$.
+    -   **If Not Migrated**: Process locally on Node $A$.
+        -   *Note*: If a write occurs, $A$ must ensure it's synced to $B$ if the key was *just* migrated, or handle the race condition. Typically, if not migrated, write to $A$, then sync process picks it up (atomic check).
+
+### 4. Dead Node Recovery
+-   **Target Failure**: If $B$ disconnects while importing, $A$ sees this and reverts $P$ from `migrating` to normal ownership.
+-   **Source Failure**: If $A$ disconnects while migrating, $B$ (and others) may need to treat $P$ as lost or rely on replicas. (Standard failure handling applies).
 
 ## Risks / Trade-offs
 
-- **[Risk] Partition stuck in LOCKED**: If Node $A$ is neither dead nor processing gossip correctly.
-    - **Mitigation**: Standard gossip failure detection will eventually mark it disconnected (~10 seconds), triggering a force-unlock.
-- **[Risk] Resize temporarily unavailable**: If locks exist during resize attempt.
-    - **Mitigation**: Client can retry. Handshakes typically complete within 1-3 gossip rounds (seconds).
-- **[Trade-off] Consistency vs Availability**: Write availability is suspended for the duration of the gossip round trip between $B \to A \to B$.
-
+-   **Complexity**: Coordinating state between two nodes via gossip (eventual consistency) plus a direct sync channel is complex.
+-   **Performance**: Forwarding requests adds latency.
+-   **Memory**: Tracking "migrated keys" on Source requires memory (Bloom filter can mitigate, but has false positives; explicit set is exact but large).
+    -   *Decision*: Use explicit tracking for now, or chunk-based tracking if possible.
+-   **Race Conditions**: Handled by atomic local checks on Source.

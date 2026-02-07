@@ -1,84 +1,60 @@
-## 1. Foundation: Data Model (Independently Testable)
+## 1. Foundation: Data Model
 
-- [ ] 1.1 Add `locked_partitions` field (`HashSet<PartitionId>`) to `SimpleNode` struct
-- [ ] 1.2 Update gossip serialization (Encode/Decode) for `locked_partitions`
-- [ ] 1.3 Add unit tests if necessary verifying serialization/deserialization of `locked_partitions`
+- [ ] 1.1 Add `importing_partitions` (HashSet<PartitionId>) to `SimpleNode` struct
+- [ ] 1.2 Add `migrating_partitions` (HashSet<PartitionId>) to `SimpleNode` struct
+- [ ] 1.3 Update gossip serialization for new fields
+- [ ] 1.4 Add unit tests for serialization
 
-## 2. Foundation: Helper Methods (Pure Functions)
+## 2. Foundation: Migration State Logic
 
-- [ ] 2.1 Implement `has_locked_partitions(&self) -> bool` in `Cluster`
-- [ ] 2.2 Implement `is_partition_locked(&self, partition: PartitionId) -> bool` in `Cluster`
-- [ ] 2.3 Implement `get_nodes_with_locked_partition(&self, partition: PartitionId) -> Vec<NodeId>` in `Cluster`
-- [ ] 2.4 Add unit tests for all helper methods
+- [ ] 2.1 Implement `is_importing(&self, partition: PartitionId) -> bool`
+- [ ] 2.2 Implement `is_migrating(&self, partition: PartitionId) -> bool`
+- [ ] 2.3 Implement `mark_key_migrated(&self, partition: PartitionId, key: String)`
+- [ ] 2.4 Implement `is_key_migrated(&self, partition: PartitionId, key: String) -> bool`
 
-## 3. Resize Guard (Standalone Feature)
+## 3. Web API: Request Forwarding & Dual Write
 
-- [ ] 3.1 Add `ResizeInProgress(String)` variant to `ClusterOperationError`
-- [ ] 3.2 Add check at start of `Cluster::resize()` to reject if `has_locked_partitions()` returns true
-- [ ] 3.3 Add unit test: resize rejected when any node has locked partitions
-- [ ] 3.4 Add unit test: resize succeeds when no locks exist
-- [ ] 3.5 Update resize API handler to return proper HTTP error for `ResizeInProgress`
+- [ ] 3.1 Implement `ForwardRequest` client logic
+- [ ] 3.2 Update `handle_post_item` to detect `migrating` status
+- [ ] 3.3 Implement "Dual Write" logic: Apply write locally, THEN forward to target.
+- [ ] 3.4 Update `handle_get_item`: Serve locally (Source has data).
+- [ ] 3.5 Ensure `WebError` handles forwarding failures gracefully (fallback to local success if target fails?).
 
-## 4. Web API Gatekeeper (Standalone Feature)
+## 4. Migration Process: Target Node (Receiver)
 
-- [ ] 4.1 Implement `PartitionLocked` variant in `WebError` for 503 responses
-- [ ] 4.2 Update `decide_routing` to check if local partition is locked before routing locally
-- [ ] 4.3 Modify write handlers (`handle_post_item`, `handle_remove_item`) to check locks and return 503
-- [ ] 4.4 Add integration test: write to locked partition returns 503
-- [ ] 4.5 Add integration test: read from locked partition succeeds
+- [ ] 4.1 Update Topology Calculation: When taking new partition $P$, add to `importing_partitions`
+- [ ] 4.2 Gossip `importing_partitions` immediately
+- [ ] 4.3 Implement Sync Receiver: Endpoint to accept bulk key data from Source
+- [ ] 4.4 Implement `finalize_import(partition)`: Remove from `importing`, become full leader
 
-## 5. Lock Initiation (New Leader)
+## 5. Migration Process: Source Node (Sender)
 
-- [ ] 5.1 Update `assign_partition_leaders` to identify partitions where leadership is changing
-- [ ] 5.2 For newly elected partitions, add them to local `locked_partitions` set
-- [ ] 5.3 Tick HLC when modifying `locked_partitions`
-- [ ] 5.4 Add unit test: new leader locks partitions it's elected to lead
-- [ ] 5.5 Add integration test: verify locked partitions are gossiped to cluster
+- [ ] 5.1 Gossip Listener: Detect when peer starts `importing` a partition we own
+- [ ] 5.2 Transition Logic: Mark partition as `migrating`
+- [ ] 5.3 Implement `StoreEngine::scan_partition` method for efficient iteration.
+- [ ] 5.4 Implement "Finite Iterator" Scan:
+    - [ ] Iterate all keys in partition using `scan_partition` (snapshot-like).
+    - [ ] Batch keys and send to Target.
+    - [ ] Do not loop for new keys (handled by Dual Write).
+- [ ] 5.5 Trigger "Sync Complete" message when iterator finishes.
+- [ ] 5.6 Cleanup: Drop `migrating` state and local data after Target confirms ownership.
 
-## 6. Lock Acknowledgment (Old Leader)
+## 6. Sync Protocol & Data Transfer
 
-- [ ] 6.1 Implement gossip observation logic to detect when remote node locks a partition
-- [ ] 6.2 If local node is current leader for that partition, add it to local `locked_partitions`
-- [ ] 6.3 Tick HLC when acknowledging lock
-- [ ] 6.4 Add unit test: old leader detects new leader's lock via gossip
-- [ ] 6.5 Add integration test: old leader acknowledges lock within one gossip round
+- [ ] 6.1 Define Sync API/Protocol (gRPC or internal HTTP endpoint)
+- [ ] 6.2 Implement batching for efficient transfer
+- [ ] 6.3 Implement retry logic for failed batches
 
-## 7. Lock Release (New Leader Opening)
+## 7. Edge Cases & Recovery
 
-- [ ] 7.1 Implement acknowledgment detection: check if all healthy assigned nodes have locked the partition
-- [ ] 7.2 Implement force-unlock detection: check if old leader is `Disconnected`
-- [ ] 7.3 Remove partition from `locked_partitions` when acknowledged or forced
-- [ ] 7.4 Tick HLC when unlocking
-- [ ] 7.5 Add unit test: new leader unlocks after acknowledgment
-- [ ] 7.6 Add unit test: new leader force-unlocks after old leader disconnected (~10s)
+- [ ] 7.1 Handle Target Node Disconnection: Source reverts `migrating` status
+- [ ] 7.2 Handle Source Node Disconnection: Target force-claims (if data loss acceptable/replicated)
+- [ ] 7.3 Handle Concurrent Resizes: Reject if any migration in progress
 
-## 8. Lock Cleanup (Old Leader)
+## 8. Testing
 
-- [ ] 8.1 Implement cleanup detection: check if new leader has removed partition from its `locked_partitions`
-- [ ] 8.2 Remove partition from local `locked_partitions` once new leader has opened
-- [ ] 8.3 Tick HLC when cleaning up
-- [ ] 8.4 Add integration test: full handshake completes within expected time window
-
-## 9. Persistence and Recovery
-
-- [ ] 9.1 Update `NodeMetadata` struct to include `locked_partitions` field
-- [ ] 9.2 Persist `locked_partitions` when node state is saved
-- [ ] 9.3 Restore `locked_partitions` on node restart (persistent nodes only)
-- [ ] 9.4 Verify ephemeral nodes initialize with empty `locked_partitions`
-- [ ] 9.5 Add integration test: node restart during handshake resumes correctly
-
-## 10. Edge Case Testing
-
-- [ ] 10.1 Test: Consecutive resize rejected during handshake (edge case #1)
-- [ ] 10.2 Test: New leader crashes mid-handshake, partition reassigned (edge case #2)
-- [ ] 10.3 Test: Network partition during handshake, eventual convergence (edge case #3)
-- [ ] 10.4 Test: False disconnection, force-unlock followed by old leader return (edge case #4)
-- [ ] 10.5 Test: Multi-node concurrent join triggering multiple handshakes
-
-## 11. Performance and Calibration
-
-- [ ] 11.1 Measure handshake duration under normal conditions (baseline)
-- [ ] 11.2 Measure handshake duration under slow gossip (degraded)
-- [ ] 11.3 Verify no split-brain writes during lock window (correctness)
-- [ ] 11.4 Calibrate gossip intervals if handshake duration is unacceptable
-- [ ] 11.5 Add observability metrics for lock state and handshake duration
+- [ ] 8.1 Unit Test: Topology calculation sets `importing`
+- [ ] 8.2 Unit Test: Gossip update triggers `migrating` state on Source
+- [ ] 8.3 Integration Test: Write to Source during migration (key not migrated) -> Success on Source
+- [ ] 8.4 Integration Test: Write to Source during migration (key migrated) -> Forwarded to Target
+- [ ] 8.5 Integration Test: Full migration flow (Start -> Sync -> Finish -> Topology Update)
