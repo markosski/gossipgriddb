@@ -2,21 +2,21 @@
 
 ## 1. Foundation & Structures
 
-- [ ] 1.1 Update `WalFile` struct to include `segment_index` and `segment_offset`.
-- [ ] 1.2 Implement a helper function to generate segment filenames (e.g., `part_1_0000000001.wal`).
-- [ ] 1.3 Update `WalLocalFile` to use `SEGMENT_SIZE_KB` constant for rotation threshold.
+- [x] 1.1 Update `WalFile` struct to include `segment_index` and `segment_offset`.
+- [x] 1.2 Implement a helper function to generate segment filenames (e.g., `part_1_0000000001.wal`).
+- [x] 1.3 Update `WalLocalFile` to use `SEGMENT_SIZE_MAX` constant for rotation threshold.
 
 ## 2. Segment Discovery & Startup
 
-- [ ] 2.1 Implement `find_latest_segment(partition_id)` to scan the base directory and return the highest existing segment index and its size.
-- [ ] 2.2 Refactor `WalLocalFile::append` internal file opening to use discovery logic instead of assuming a single file name.
-- [ ] 2.3 Ensure `read_lsn` correctly handles reading the last record from the latest segment during initialization.
+- [x] 2.1 Implement `find_latest_segment(partition_id)` to scan the base directory and return the highest existing segment index and its size.
+- [x] 2.2 Refactor `WalLocalFile::append` internal file opening to use discovery logic instead of assuming a single file name.
+- [x] 2.3 Ensure `read_lsn` correctly handles reading the last record from the latest segment during initialization.
 
 ## 3. Rotation Implementation
 
-- [ ] 3.1 In `WalLocalFile::append`, add a check if the current record will exceed the segment size.
-- [ ] 3.2 Implement the `rotate_segment(partition_id)` method: flush, sync, close current, and open new indexed file.
-- [ ] 3.3 Update the `write_handles` map with the new file handle post-rotation.
+- [x] 3.1 In `WalLocalFile::append`, add a check if the current record will exceed the segment size.
+- [x] 3.2 Implement the `rotate_segment(partition_id)` method: flush, sync, close current, and open new indexed file.
+- [x] 3.3 Update the `write_handles` map with the new file handle post-rotation.
 
 ## 4. Chained Reader Implementation
 

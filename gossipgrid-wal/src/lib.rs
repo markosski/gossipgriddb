@@ -19,6 +19,45 @@ use serde::{Deserialize, Serialize};
 
 pub type Lsn = u64;
 
+/// Maximum segment size in bytes (64 MB).
+const SEGMENT_SIZE_MAX: u64 = 64 * 1024 * 1024;
+
+/// Generate a segment filename, e.g. `part_1_0000000001.wal`
+fn segment_filename(partition: WalPartitionId, segment_index: u64) -> String {
+    format!("part_{partition}_{segment_index:010}.wal")
+}
+
+/// Scan `base_dir` for segment files belonging to `partition` and return
+/// `(highest_segment_index, file_size_in_bytes)`.
+///
+/// Segment files follow the pattern `part_{partition}_{index:010}.wal`.
+/// If no matching files are found the function returns `(1, 0)` so the
+/// first write creates segment index 1.
+fn find_latest_segment(base_dir: &std::path::Path, partition: WalPartitionId) -> (u64, u64) {
+    let prefix = format!("part_{}_", partition.0);
+
+    let best = std::fs::read_dir(base_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().into_string().ok()?;
+            if !name.starts_with(&prefix) || !name.ends_with(".wal") {
+                return None;
+            }
+            // Extract the segment index between the second '_' and '.wal'
+            let without_ext = name.strip_suffix(".wal")?;
+            let idx_str = without_ext.strip_prefix(&prefix)?;
+            let idx: u64 = idx_str.parse().ok()?;
+            let size = entry.metadata().ok()?.len();
+            Some((idx, size))
+        })
+        .max_by_key(|(idx, _)| *idx);
+
+    best.unwrap_or((1, 0))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
 pub struct WalPartitionId(pub u16);
 
@@ -99,6 +138,9 @@ pub struct WalFile {
     buffer: tokio::io::BufWriter<tokio::fs::File>,
     current_lsn: u64,
     current_offset: u64,
+    partition: WalPartitionId,
+    segment_index: u64,
+    segment_offset: u64,
 }
 
 impl WalFile {
@@ -181,15 +223,15 @@ impl WalWriter for WalLocalFile {
             if let Some(lock) = map.get(&partition).cloned() {
                 lock
             } else {
-                let writer_path = format!(
-                    "{}/part_{}.wal",
-                    self.base_dir
-                        .to_str()
-                        .ok_or_else(|| WalError::GeneralError(
-                            "WAL base directory path is not valid UTF-8".to_string()
-                        ))?,
-                    partition
-                );
+                let base_str = self.base_dir.to_str().ok_or_else(|| {
+                    WalError::GeneralError("WAL base directory path is not valid UTF-8".to_string())
+                })?;
+
+                // Discover the latest segment for this partition
+                let (seg_index, seg_size) = find_latest_segment(&self.base_dir, partition);
+                let seg_name = segment_filename(partition, seg_index);
+                let writer_path = format!("{base_str}/{seg_name}");
+
                 // Open the file first to get latest LSN and offset
                 let (lsn, offset) = if self.truncate_at_start {
                     (0, 0)
@@ -211,6 +253,9 @@ impl WalWriter for WalLocalFile {
                     buffer: tokio::io::BufWriter::new(file_write),
                     current_lsn: lsn,
                     current_offset: offset,
+                    partition,
+                    segment_index: seg_index,
+                    segment_offset: seg_size,
                 };
 
                 let lock = Arc::new(Mutex::new(wal_file));
@@ -233,6 +278,17 @@ impl WalWriter for WalLocalFile {
         let payload = bincode::encode_to_vec(&framed, bincode::config::standard())
             .map_err(|e| WalError::GeneralError(format!("Failed to encode WAL record: {e}")))?;
 
+        // Check if this record will exceed the segment size
+        // Rotate to a new segment if needed
+        let record_size = 4 + payload.len() as u64 + 8; // len header + payload + lsn footer
+
+        // segment_offset > 0 prevents infinite rotation loop if single record is greater than max segment size
+        if wal_file_write.segment_offset + record_size > SEGMENT_SIZE_MAX
+            && wal_file_write.segment_offset > 0
+        {
+            WalLocalFile::rotate_segment(&self.base_dir, &mut wal_file_write).await?;
+        }
+
         let (lsn, offset) = WalLocalFile::write_data(
             &mut wal_file_write.buffer,
             &payload,
@@ -243,6 +299,7 @@ impl WalWriter for WalLocalFile {
 
         wal_file_write.current_offset = offset;
         wal_file_write.current_lsn = lsn;
+        wal_file_write.segment_offset += record_size;
 
         // Also update watchers
         {
@@ -312,6 +369,54 @@ impl WalLocalFile {
 
         Ok((lsn, offset + 8 + 4 + len as u64))
     }
+
+    /// Rotate the current WAL segment: flush, sync, close, and open a new segment file.
+    ///
+    /// This mutates the `WalFile` in-place, replacing the buffer with a new file handle
+    /// pointing at the next segment index. The `segment_offset` is reset to 0.
+    async fn rotate_segment(
+        base_dir: &std::path::Path,
+        wal_file: &mut WalFile,
+    ) -> Result<(), WalError> {
+        // 1. Flush the BufWriter
+        wal_file
+            .buffer
+            .flush()
+            .await
+            .map_err(|e| WalError::GeneralError(format!("Failed to flush before rotation: {e}")))?;
+
+        // 2. sync_data on the underlying file
+        wal_file
+            .buffer
+            .get_ref()
+            .sync_data()
+            .await
+            .map_err(|e| WalError::GeneralError(format!("Failed to sync before rotation: {e}")))?;
+
+        // 3. Increment segment index and open new file
+        let new_index = wal_file.segment_index + 1;
+
+        let base_str = base_dir.to_str().ok_or_else(|| {
+            WalError::GeneralError("WAL base directory path is not valid UTF-8".to_string())
+        })?;
+
+        let seg_name = segment_filename(wal_file.partition, new_index);
+        let new_path = format!("{base_str}/{seg_name}");
+
+        let new_file = WalFile::open_write(&new_path, false).await?;
+
+        info!(
+            "WAL rotation: partition {} segment {} -> {}",
+            wal_file.partition, wal_file.segment_index, new_index
+        );
+
+        // 4. Replace internal state (old file is dropped / closed)
+        wal_file.buffer = tokio::io::BufWriter::new(new_file);
+        wal_file.segment_index = new_index;
+        wal_file.segment_offset = 0;
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -341,7 +446,10 @@ impl WalReader for WalLocalFile {
                 ))));
             }
         };
-        let path = format!("{base_dir_str}/part_{partition}.wal");
+        // Use segment 1 as the starting segment for reading.
+        // (Chained reading across segments is implemented in task 4.)
+        let seg_name = segment_filename(partition, 1);
+        let path = format!("{base_dir_str}/{seg_name}");
 
         let file = if let Ok(file) = std::fs::File::open(&path) {
             file
