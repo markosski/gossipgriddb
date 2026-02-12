@@ -58,6 +58,35 @@ fn find_latest_segment(base_dir: &std::path::Path, partition: WalPartitionId) ->
     best.unwrap_or((1, 0))
 }
 
+/// Return a sorted list of `(segment_index, file_size)` for every segment
+/// file belonging to `partition` inside `base_dir`.
+///
+/// The returned vec is ordered by `segment_index` ascending.
+fn find_all_segments(base_dir: &std::path::Path, partition: WalPartitionId) -> Vec<(u64, u64)> {
+    let prefix = format!("part_{}_", partition.0);
+
+    let mut segments: Vec<(u64, u64)> = std::fs::read_dir(base_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().into_string().ok()?;
+            if !name.starts_with(&prefix) || !name.ends_with(".wal") {
+                return None;
+            }
+            let without_ext = name.strip_suffix(".wal")?;
+            let idx_str = without_ext.strip_prefix(&prefix)?;
+            let idx: u64 = idx_str.parse().ok()?;
+            let size = entry.metadata().ok()?.len();
+            Some((idx, size))
+        })
+        .collect();
+
+    segments.sort_by_key(|(idx, _)| *idx);
+    segments
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
 pub struct WalPartitionId(pub u16);
 
@@ -446,51 +475,87 @@ impl WalReader for WalLocalFile {
                 ))));
             }
         };
-        // Use segment 1 as the starting segment for reading.
-        // (Chained reading across segments is implemented in task 4.)
-        let seg_name = segment_filename(partition, 1);
-        let path = format!("{base_dir_str}/{seg_name}");
 
-        let file = if let Ok(file) = std::fs::File::open(&path) {
-            file
+        // Discover all segments for this partition, sorted by index.
+        let segments = find_all_segments(&self.base_dir, partition);
+
+        // Determine the starting segment index and local file offset.
+        // `from_offset` is a global offset across all segments.  We walk
+        // the ordered segment list, accumulating sizes, to find which
+        // segment contains `from_offset`.
+        let (start_seg_pos, local_offset) = if from_offset == 0 || segments.is_empty() {
+            // Start from the very first segment at file position 0.
+            (0usize, 0u64)
         } else {
-            // make sure directory is there
+            let mut cumulative: u64 = 0;
+            let mut found = None;
+            for (i, &(_idx, size)) in segments.iter().enumerate() {
+                if cumulative + size > from_offset {
+                    found = Some((i, from_offset - cumulative));
+                    break;
+                }
+                cumulative += size;
+            }
+            // If the offset is exactly at the end of the last segment,
+            // position to the next (possibly non-existent yet) segment at 0.
+            found.unwrap_or((segments.len(), 0))
+        };
+
+        // Build the initial list of segment indices we will iterate through.
+        let mut seg_indices: Vec<u64> = segments
+            .iter()
+            .skip(start_seg_pos)
+            .map(|&(idx, _)| idx)
+            .collect();
+
+        // If there are no segments at all, create the first segment file so
+        // the empty-iterator path still works correctly.
+        if seg_indices.is_empty() {
             if let Err(e) = std::fs::create_dir_all(&self.base_dir) {
                 return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
                     "Failed to create WAL directory: {e}"
                 )))));
             }
+            let path = format!("{base_dir_str}/{}", segment_filename(partition, 1));
+            if let Err(e) = std::fs::File::create(&path) {
+                return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
+                    "Failed to create WAL file: {e}"
+                )))));
+            }
+            seg_indices.push(1);
+        }
 
-            match std::fs::File::create(&path) {
-                Ok(_) => match std::fs::File::open(&path) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
-                            "Failed to reopen WAL file after creation: {e}"
-                        )))));
-                    }
-                },
-                Err(e) => {
-                    return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
-                        "Failed to create WAL file: {e}"
-                    )))));
-                }
+        // Open the first segment file and seek to local_offset.
+        let first_idx = seg_indices[0];
+        let first_path = format!("{base_dir_str}/{}", segment_filename(partition, first_idx));
+        let file = match std::fs::File::open(&first_path) {
+            Ok(f) => f,
+            Err(e) => {
+                return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
+                    "Failed to open WAL segment file '{first_path}': {e}"
+                )))));
             }
         };
 
         let mut reader = std::io::BufReader::new(file);
-
-        if let Err(e) = reader.seek(std::io::SeekFrom::Start(from_offset)) {
+        if let Err(e) = reader.seek(std::io::SeekFrom::Start(local_offset)) {
             error!("Failed to seek WAL file: {e}");
             return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
                 "Failed to seek WAL file: {e}"
             )))));
         }
 
-        let mut current_offset = from_offset;
+        // State for the chained iterator.
+        let mut current_offset = from_offset; // global offset
+        let mut seg_cursor = 0usize; // position within seg_indices
+        let mut current_seg_index = first_idx;
+        let base_dir_owned = self.base_dir.clone();
+
         let iter = std::iter::from_fn(move || {
             loop {
-                // Read payload lengths
+                // --- Try to read a record from the current reader ---
+
+                // Read the 4-byte payload length header.
                 let len = {
                     let mut len_buf = [0u8; 4];
                     let mut bytes_read = 0;
@@ -498,7 +563,38 @@ impl WalReader for WalLocalFile {
                         match reader.read(&mut len_buf[bytes_read..]) {
                             Ok(0) => {
                                 if bytes_read == 0 {
-                                    return None; // Clean EOF
+                                    // TODO: skip to proper segment based on LSN/offset
+                                    // Clean EOF on this segment – try the next one.
+                                    seg_cursor += 1;
+
+                                    // Check if the next segment index is known.
+                                    let next_index = if seg_cursor < seg_indices.len() {
+                                        seg_indices[seg_cursor]
+                                    } else {
+                                        // Speculatively try index + 1 (the writer
+                                        // may have rotated since we scanned).
+                                        current_seg_index + 1
+                                    };
+
+                                    let next_name = segment_filename(partition, next_index);
+                                    let next_path = format!(
+                                        "{}/{}",
+                                        base_dir_owned.to_str().unwrap_or(""),
+                                        next_name,
+                                    );
+
+                                    match std::fs::File::open(&next_path) {
+                                        Ok(f) => {
+                                            reader = std::io::BufReader::new(f);
+                                            current_seg_index = next_index;
+                                            // Update seg_indices if we discovered a new segment.
+                                            if seg_cursor >= seg_indices.len() {
+                                                seg_indices.push(next_index);
+                                            }
+                                            continue; // retry read from new reader
+                                        }
+                                        Err(_) => return None, // no more segments
+                                    }
                                 } else {
                                     return Some(Err(WalError::GeneralError(
                                         "Unexpected EOF reading length".to_string(),
@@ -516,11 +612,12 @@ impl WalReader for WalLocalFile {
                     u32::from_le_bytes(len_buf) as usize
                 };
 
+                // Read the payload.
                 let payload = {
                     let mut payload_buf = vec![0u8; len];
                     if let Err(e) = reader.read_exact(&mut payload_buf) {
                         if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                            return None; // Partial record at EOF, treat as "not yet ready"
+                            return None; // Partial record at EOF
                         }
                         return Some(Err(WalError::GeneralError(format!(
                             "failed to read entire payload content into buffer, {e}, for partition: {partition}, offset: {current_offset}, current lsn: {from_lsn}, len: {len}",
@@ -529,21 +626,21 @@ impl WalReader for WalLocalFile {
                     payload_buf
                 };
 
+                // Read the 8-byte LSN footer.
                 let lsn = {
                     let mut lsn_buf = [0u8; 8];
                     if let Err(e) = reader.read_exact(&mut lsn_buf) {
                         if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                            return None; // Partial record at EOF, treat as "not yet ready"
+                            return None; // Partial record at EOF
                         }
                         return Some(Err(WalError::GeneralError(format!(
                             "failed to read entire lsn into buffer, {e}, for partition: {partition}, offset: {current_offset}, current lsn: {from_lsn}",
                         ))));
                     }
-
                     u64::from_le_bytes(lsn_buf)
                 };
 
-                // verify LSN and offset match
+                // Verify LSN and offset match (same as before).
                 if from_offset > 0 && from_offset == current_offset && (lsn - from_lsn) != 1 {
                     return Some(Err(WalError::LsnOffsetMismatch(format!(
                         "LSN mismatch in WAL file partition: {partition}, from lsn: {from_lsn}, from offset: {from_offset}, current lsn: {lsn}, current offset: {current_offset}",

@@ -20,9 +20,9 @@
 
 ## 4. Chained Reader Implementation
 
-- [ ] 4.1 Create a `SegmentedIterator` wrapper that can handle switching between multiple `BufReader`s.
-- [ ] 4.2 Update `stream_from` to find the correct starting segment based on the requested `from_lsn` or `from_offset`.
-- [ ] 4.3 Implement "next segment" logic in the iterator: when EOF is reached, attempt to open `index + 1`.
+- [x] 4.1 Create a `SegmentedIterator` wrapper that can handle switching between multiple `BufReader`s.
+- [x] 4.2 Update `stream_from` to find the correct starting segment based on the requested `from_lsn` or `from_offset`.
+- [x] 4.3 Implement "next segment" logic in the iterator: when EOF is reached, attempt to open `index + 1`.
 
 ## 5. Cleanup Logic
 
