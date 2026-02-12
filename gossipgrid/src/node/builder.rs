@@ -37,7 +37,7 @@ use crate::cluster::Cluster;
 use crate::env::Env;
 use crate::event_bus::EventBus;
 use crate::store::Store;
-use crate::store::memory_store::InMemoryStore;
+use crate::store::btree_store::BTreeStore;
 use crate::wal::WalLocalFile;
 
 use super::address::NodeAddress;
@@ -213,11 +213,6 @@ impl NodeBuilder {
             ));
         }
 
-        // Create store (default to InMemoryStore)
-        let store: Box<dyn Store + Send + Sync> = self
-            .store
-            .unwrap_or_else(|| Box::new(InMemoryStore::default()));
-
         // Determine WAL namespace
         let wal_namespace = if self.is_ephemeral {
             EPHEMERAL.to_string()
@@ -226,6 +221,15 @@ impl NodeBuilder {
         } else {
             EPHEMERAL.to_string()
         };
+
+        // Create store (default to BTreeStore with node-specific path)
+        let store: Box<dyn Store + Send + Sync> = self.store.unwrap_or_else(|| {
+            let btree_path = crate::fs::btree_dir(&wal_namespace);
+            Box::new(BTreeStore::new(
+                btree_path.to_str().unwrap(),
+                self.is_ephemeral,
+            ))
+        });
 
         // Create WAL
         let wal = WalLocalFile::new(&wal_namespace, self.is_ephemeral)

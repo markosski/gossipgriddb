@@ -43,6 +43,7 @@ dashmap = "6.1.0"
 futures = "0.3.31"
 mlua = { version = "0.9", features = ["serialize", "lua54", "vendored"] }
 serde_urlencoded = "0.7"
+bf-tree = { version = "0.4.7" }
 
 
 [dev-dependencies]

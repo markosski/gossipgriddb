@@ -33,6 +33,10 @@ pub fn wal_dir(cluster_name: &str) -> PathBuf {
     clusters_dir().join(cluster_name).join(WAL_DIR)
 }
 
+pub fn btree_dir(cluster_name: &str) -> PathBuf {
+    clusters_dir().join(cluster_name).join("btree")
+}
+
 pub fn cluster_metadata_path(cluster_name: &str) -> PathBuf {
     clusters_dir()
         .join(cluster_name)

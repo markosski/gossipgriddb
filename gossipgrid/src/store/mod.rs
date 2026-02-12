@@ -11,7 +11,7 @@
 //! - [`PartitionKey`] - The primary key used for partitioning data
 //! - [`RangeKey`] - Optional secondary key for ordering within a partition  
 //! - [`StorageKey`] - Composite key combining partition and range keys
-
+pub mod btree_store;
 #[cfg(feature = "memory-store")]
 pub mod memory_store;
 
