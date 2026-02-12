@@ -9,9 +9,9 @@ use crate::item::{Item, ItemEntry, ItemStatus};
 use crate::node::NodeMetadata;
 use crate::store::{DataStoreError, StorageKey, Store};
 use crate::sync::{FramedWalRecordItem, SyncState};
-use crate::wal::{Wal, WalRecord};
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
+use gossipgrid_wal::{Wal, WalRecord};
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -474,13 +474,13 @@ impl JoinedNode {
     ) -> Result<Option<(StorageKey, Vec<(PartitionId, u64)>)>, NodeError> {
         let wal_record = match entry.item.status {
             ItemStatus::Active => WalRecord::Put {
-                partition: *partition,
+                partition: (*partition).into(),
                 key: entry.storage_key.to_string().into_bytes(),
                 value: entry.item.message.clone(),
                 hlc: entry.item.hlc.clone().timestamp,
             },
             ItemStatus::Tombstone(_) => WalRecord::Delete {
-                partition: *partition,
+                partition: (*partition).into(),
                 key: entry.storage_key.to_string().into_bytes(),
                 hlc: entry.item.hlc.clone().timestamp,
             },
@@ -798,7 +798,7 @@ impl JoinedNode {
 
                 // stream_from is async but returns a sync iterator
                 let stream =
-                    rt.block_on(wal.stream_from(lsn_accum, offset_accum, partition, false));
+                    rt.block_on(wal.stream_from(lsn_accum, offset_accum, partition.into(), false));
 
                 for record_result in stream {
                     match record_result {

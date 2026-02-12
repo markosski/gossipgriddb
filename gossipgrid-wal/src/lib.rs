@@ -5,7 +5,6 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
     sync::Arc,
-    time::Duration,
 };
 use thiserror::Error;
 use tokio::io::BufWriter;
@@ -16,24 +15,41 @@ use tokio::{
     sync::RwLock,
 };
 
-const WAL_SYNC_IO_INTERVAL_MILLIS: u16 = 100;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{cluster::PartitionId, env::Env, fs, node::NodeAddress};
+pub type Lsn = u64;
 
-type Lsn = u64;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+pub struct WalPartitionId(pub u16);
+
+impl WalPartitionId {
+    pub fn value(self) -> u16 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for WalPartitionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<u16> for WalPartitionId {
+    fn from(value: u16) -> Self {
+        WalPartitionId(value)
+    }
+}
 
 #[derive(Serialize, Deserialize, Encode, Decode, Clone, Debug, PartialEq)]
 pub enum WalRecord {
     Put {
-        partition: PartitionId,
+        partition: WalPartitionId,
         key: Vec<u8>,
         value: Vec<u8>,
         hlc: u64,
     },
     Delete {
-        partition: PartitionId,
+        partition: WalPartitionId,
         key: Vec<u8>,
         hlc: u64,
     },
@@ -51,12 +67,14 @@ pub trait WalReader: Send + Sync {
         &self,
         from_lsn: Lsn,
         from_offset: u64,
-        partition: PartitionId,
+        partition: WalPartitionId,
         is_exclusive: bool,
     ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, u64), WalError>> + '_>;
 
-    async fn get_lsn_watcher(&self, partition_id: PartitionId)
-    -> tokio::sync::watch::Receiver<u64>;
+    async fn get_lsn_watcher(
+        &self,
+        partition_id: WalPartitionId,
+    ) -> tokio::sync::watch::Receiver<u64>;
 }
 
 #[async_trait::async_trait]
@@ -72,8 +90,8 @@ impl<T: WalReader + WalWriter> Wal for T {}
 pub struct WalLocalFile {
     base_dir: PathBuf,
     truncate_at_start: bool,
-    pub write_handles: RwLock<HashMap<PartitionId, Arc<Mutex<WalFile>>>>,
-    pub lsn_watchers: RwLock<HashMap<PartitionId, tokio::sync::watch::Sender<u64>>>,
+    pub write_handles: RwLock<HashMap<WalPartitionId, Arc<Mutex<WalFile>>>>,
+    pub lsn_watchers: RwLock<HashMap<WalPartitionId, tokio::sync::watch::Sender<u64>>>,
 }
 
 #[derive(Debug)]
@@ -102,8 +120,7 @@ impl WalFile {
 }
 
 impl WalLocalFile {
-    pub async fn new(namespace: &str, truncate: bool) -> Result<Self, WalError> {
-        let base_dir = fs::wal_dir(namespace);
+    pub async fn new(base_dir: PathBuf, truncate: bool) -> Result<Self, WalError> {
         if truncate {
             match tokio::fs::remove_dir_all(&base_dir).await {
                 Ok(()) => info!("deleted WAL dir '{base_dir:?}'"),
@@ -313,7 +330,7 @@ impl WalReader for WalLocalFile {
         &self,
         from_lsn: u64,
         from_offset: u64,
-        partition: PartitionId,
+        partition: WalPartitionId,
         is_exclusive: bool,
     ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, u64), WalError>> + '_> {
         let base_dir_str = match self.base_dir.to_str() {
@@ -451,7 +468,7 @@ impl WalReader for WalLocalFile {
 
     async fn get_lsn_watcher(
         &self,
-        partition_id: PartitionId,
+        partition_id: WalPartitionId,
     ) -> tokio::sync::watch::Receiver<u64> {
         // Try getting a read lock first
         {
@@ -473,24 +490,6 @@ impl WalReader for WalLocalFile {
     }
 }
 
-pub async fn wal_flush(
-    node_address: NodeAddress,
-    env: Arc<Env>,
-    mut shutdown_receiver: tokio::sync::broadcast::Receiver<()>,
-) {
-    let wal = env.get_wal();
-    loop {
-        tokio::select! {
-            _ = shutdown_receiver.recv() => {
-                info!("node={}; Shutting down wal flush task", &node_address);
-                break;
-            }
-            _ = tokio::time::sleep(Duration::from_millis(WAL_SYNC_IO_INTERVAL_MILLIS as u64)) => {}
-        }
-        let _ = wal.io_sync().await;
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum WalError {
     #[error("General WAL error: {0}")]
@@ -501,23 +500,23 @@ pub enum WalError {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
     use super::*;
 
     #[tokio::test]
     async fn test_wal() {
-        let wal = WalLocalFile::new("/tmp/test", true).await.unwrap();
+        let wal = WalLocalFile::new(PathBuf::from("/tmp/test"), true)
+            .await
+            .unwrap();
 
         let record1 = WalRecord::Put {
-            partition: PartitionId(0),
+            partition: WalPartitionId(0),
             key: b"key".to_vec(),
             value: b"value".to_vec(),
             hlc: 0,
         };
 
         let record2 = WalRecord::Put {
-            partition: PartitionId(0),
+            partition: WalPartitionId(0),
             key: b"key2".to_vec(),
             value: b"value2".to_vec(),
             hlc: 0,
@@ -532,7 +531,7 @@ mod tests {
         assert_eq!(offset, 54);
 
         let (record, offset) = wal
-            .stream_from(1, 0, PartitionId(0), false)
+            .stream_from(1, 0, WalPartitionId(0), false)
             .await
             .next()
             .unwrap()
@@ -542,7 +541,7 @@ mod tests {
         assert_eq!(offset, 26);
 
         let (record, offset) = wal
-            .stream_from(1, 0, PartitionId(0), true)
+            .stream_from(1, 0, WalPartitionId(0), true)
             .await
             .next()
             .unwrap()
@@ -553,7 +552,7 @@ mod tests {
 
         // Uses offset instead of fast forward to LSN
         let (record, offset) = wal
-            .stream_from(1, 26, PartitionId(0), true)
+            .stream_from(1, 26, WalPartitionId(0), true)
             .await
             .next()
             .unwrap()
@@ -563,11 +562,11 @@ mod tests {
         assert_eq!(offset, 54);
 
         // Unhappy Path: Uses offset instead of fast forward to LSN
-        let record = wal.stream_from(1, 25, PartitionId(0), true).await.next();
+        let record = wal.stream_from(1, 25, WalPartitionId(0), true).await.next();
 
         assert!(record.is_none());
 
-        let record = wal.stream_from(2, 0, PartitionId(0), true).await.next();
+        let record = wal.stream_from(2, 0, WalPartitionId(0), true).await.next();
         assert!(record.is_none());
     }
 
@@ -593,37 +592,5 @@ mod tests {
 
         // Clean up
         tokio::fs::remove_file(temp_path).await.ok();
-    }
-
-    #[tokio::test]
-    async fn test_wal_loop_append_async() {
-        let base_dir = "/tmp/test_wal_loop";
-        let mut open_opts = tokio::fs::OpenOptions::new();
-        open_opts.write(true).truncate(true).create(true);
-
-        let file = open_opts.open(base_dir).await.unwrap();
-        let mut buf = tokio::io::BufWriter::new(file);
-
-        let data = "this is some test data, please write it to the file";
-        for _ in 0..1000000 {
-            buf.write_all(data.as_bytes()).await.unwrap();
-            buf.flush().await.unwrap();
-        }
-    }
-
-    #[test]
-    fn test_wal_loop_append() {
-        let base_dir = "/tmp/test_wal_loop";
-        let mut open_opts = std::fs::OpenOptions::new();
-        open_opts.write(true).truncate(true).create(true);
-
-        let file = open_opts.open(base_dir).unwrap();
-        let mut buf = std::io::BufWriter::new(file);
-
-        let data = "this is some test data, please write it to the file";
-        for _ in 0..1000000 {
-            buf.write_all(data.as_bytes()).unwrap();
-            buf.flush().unwrap();
-        }
     }
 }

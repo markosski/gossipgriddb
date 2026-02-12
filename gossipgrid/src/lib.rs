@@ -38,15 +38,12 @@ pub mod event_bus;
 #[doc(hidden)]
 pub mod function_registry;
 
-pub(crate) mod fs;
+#[doc(hidden)]
+pub mod fs;
 pub(crate) mod gossip;
 #[doc(hidden)]
 pub mod item;
 pub(crate) mod sync;
-#[doc(hidden)]
-pub mod wal;
-#[doc(hidden)]
-pub use wal::WalLocalFile;
 #[doc(hidden)]
 pub mod web;
 

@@ -3,7 +3,7 @@ use crate::node::{NodeAddress, SimpleNode, SimpleNodeState};
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
+
 use std::io;
 use thiserror::Error;
 
@@ -35,8 +35,8 @@ impl PartitionId {
     }
 }
 
-impl fmt::Display for PartitionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for PartitionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -44,6 +44,18 @@ impl fmt::Display for PartitionId {
 impl From<u16> for PartitionId {
     fn from(value: u16) -> Self {
         PartitionId(value)
+    }
+}
+
+impl From<PartitionId> for gossipgrid_wal::WalPartitionId {
+    fn from(p: PartitionId) -> Self {
+        gossipgrid_wal::WalPartitionId(p.0)
+    }
+}
+
+impl From<gossipgrid_wal::WalPartitionId> for PartitionId {
+    fn from(p: gossipgrid_wal::WalPartitionId) -> Self {
+        PartitionId(p.0)
     }
 }
 

@@ -23,7 +23,7 @@ use crate::event_bus::{Event, start_event_loop};
 use crate::fs as fs_paths;
 use crate::gossip::{handle_messages_task, send_membership_gossip_task};
 use crate::sync::LsnOffset;
-use crate::{sync, wal, web};
+use crate::{sync, web};
 use laminar::{Config, Socket, SocketEvent};
 use log::info;
 use std::collections::HashMap;
@@ -94,7 +94,16 @@ impl NodeRuntime {
 /// See examples/demo for CLI implementation to properly start nodes.
 ///
 /// # Example
-/// ```
+/// ```ignore
+/// # use std::sync::Arc;
+/// # use tokio::sync::RwLock;
+/// # use gossipgrid::node::{NodeState, NodeAddress};
+/// # use gossipgrid::event_bus::EventBus;
+/// # use gossipgrid::env::Env;
+/// # let local_addr: NodeAddress = "127.0.0.1:4009".try_into().unwrap();
+/// # let web_port = 3001;
+/// # let peer_addr = None;
+/// # let cluster_config = None;
 /// let node_state = Arc::new(RwLock::new(NodeState::init(
 ///     local_addr.clone(),
 ///     web_port,
@@ -103,29 +112,20 @@ impl NodeRuntime {
 /// )));
 ///
 /// let bus = EventBus::new();
-/// let store = Box::new(gossipgrid::store::memory_store::InMemoryStore::new());
+/// let store = Box::new(gossipgrid::store::memory_store::InMemoryStore::default());
 ///
-/// let env: Arc<Env> = Arc::new(env::Env::new(
+/// let env: Arc<Env> = Arc::new(Env::new(
 ///     store,
 ///     Box::new(
-///         gossipgrid::WalLocalFile::new("<typically_cluster_name>", true)
+///         gossipgrid::WalLocalFile::new(std::path::PathBuf::from("<typically_cluster_name>"), true)
 ///             .await
 ///             .unwrap(),
 ///     ),
 ///     bus,
 /// ));
 ///
-/// let node = node::start_node(local_addr, web_port, node_state, env).await?;
-///
-/// let abort_handle = node.abort_handle();
-/// tokio::spawn(async move {
-///     if let Ok(()) = tokio::signal::ctrl_c().await {
-///         println!("Shutdown signal received");
-///         abort_handle.abort();
-///     }
-/// });
-///
-/// node.wait().await?;
+/// let node = gossipgrid::node::start_node(local_addr, web_port, node_state, env).await?;
+/// # Ok::<(), gossipgrid::node::NodeError>(())
 /// ```
 pub async fn start_node(
     local_addr: NodeAddress,
@@ -272,7 +272,7 @@ pub async fn start_node(
     ));
 
     // Start WAL flusher
-    let flush_wal = tokio::spawn(wal::wal_flush(
+    let flush_wal = tokio::spawn(wal_flush(
         node_address.clone(),
         env.clone(),
         shutdown_receiver.resubscribe(),
@@ -365,5 +365,25 @@ impl NodeMetadata {
         let state: NodeMetadata = serde_json::from_str(&json)
             .map_err(|e| NodeError::NodePersistenceError(e.to_string()))?;
         Ok(Some(state))
+    }
+}
+
+const WAL_SYNC_IO_INTERVAL_MILLIS: u16 = 100;
+
+pub async fn wal_flush(
+    node_address: NodeAddress,
+    env: Arc<Env>,
+    mut shutdown_receiver: tokio::sync::broadcast::Receiver<()>,
+) {
+    let wal = env.get_wal();
+    loop {
+        tokio::select! {
+            _ = shutdown_receiver.recv() => {
+                info!("node={}; Shutting down wal flush task", &node_address);
+                break;
+            }
+            _ = tokio::time::sleep(Duration::from_millis(WAL_SYNC_IO_INTERVAL_MILLIS as u64)) => {}
+        }
+        let _ = wal.io_sync().await;
     }
 }
