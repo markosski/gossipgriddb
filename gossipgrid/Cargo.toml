@@ -20,6 +20,7 @@ default = ["memory-store"]
 memory-store = []
 
 [dependencies]
+gossipgrid-wal = { path = "../gossipgrid-wal" }
 tokio = { version = "1.48.0", features = ["net", "sync", "time", "rt-multi-thread", "macros", "signal"] }
 warp = { version = "0.4.2", features = ["server"] }
 twox-hash = { version = "2.1.*" }

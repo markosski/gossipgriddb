@@ -759,6 +759,7 @@ dependencies = [
  "env_logger",
  "fastcache",
  "futures",
+ "gossipgrid-wal",
  "laminar",
  "log",
  "mlua",
@@ -774,6 +775,18 @@ dependencies = [
  "twox-hash",
  "uuid",
  "warp",
+]
+
+[[package]]
+name = "gossipgrid-wal"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bincode",
+ "log",
+ "serde",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

@@ -9,9 +9,9 @@ use crate::env::Env;
 use crate::item::{Item, ItemEntry, ItemStatus};
 use crate::node::{self, NodeAddress, NodeId, NodeState};
 use crate::store::{DataStoreError, StorageKey};
-use crate::wal::{FramedWalRecord, WalRecord};
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
+use gossipgrid_wal::{FramedWalRecord, WalRecord};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -673,7 +673,7 @@ impl From<FramedWalRecord> for FramedWalRecordItem {
                     },
                 },
                 lsn,
-                partition,
+                partition: partition.into(),
                 key_bytes: key,
             },
             FramedWalRecord {
@@ -694,7 +694,7 @@ impl From<FramedWalRecord> for FramedWalRecordItem {
                     },
                 },
                 lsn,
-                partition,
+                partition: partition.into(),
                 key_bytes: key,
             },
         }
@@ -728,7 +728,7 @@ pub async fn server_handle_request(
 
     let mut watchers = Vec::new();
     for partition in &request.partitions {
-        watchers.push(wal_lock.get_lsn_watcher(partition.partition).await);
+        watchers.push(wal_lock.get_lsn_watcher(partition.partition.into()).await);
     }
 
     let mut current_iteration_partitions: HashSet<PartitionId> =
@@ -755,7 +755,12 @@ pub async fn server_handle_request(
 
             let is_exclusive = last_lsn > 0;
             let iter = wal_lock
-                .stream_from(last_lsn, last_offset, req_partition.partition, is_exclusive)
+                .stream_from(
+                    last_lsn,
+                    last_offset,
+                    req_partition.partition.into(),
+                    is_exclusive,
+                )
                 .await;
 
             for record in iter {

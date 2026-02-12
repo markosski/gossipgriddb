@@ -1,6 +1,7 @@
 use reqwest::Client;
 
-use crate::{event_bus::EventBus, function_registry::FunctionRegistry, store::Store, wal::Wal};
+use crate::{event_bus::EventBus, function_registry::FunctionRegistry, store::Store};
+use gossipgrid_wal::Wal;
 
 pub struct Env {
     pub store: Box<dyn Store + Send + Sync>,

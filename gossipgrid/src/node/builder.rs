@@ -38,7 +38,7 @@ use crate::env::Env;
 use crate::event_bus::EventBus;
 use crate::store::Store;
 use crate::store::memory_store::InMemoryStore;
-use crate::wal::WalLocalFile;
+use gossipgrid_wal::WalLocalFile;
 
 use super::address::NodeAddress;
 use super::state::NodeState;
@@ -228,7 +228,7 @@ impl NodeBuilder {
         };
 
         // Create WAL
-        let wal = WalLocalFile::new(&wal_namespace, self.is_ephemeral)
+        let wal = WalLocalFile::new(crate::fs::wal_dir(&wal_namespace), self.is_ephemeral)
             .await
             .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?;
 
