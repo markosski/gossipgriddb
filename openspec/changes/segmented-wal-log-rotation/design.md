@@ -49,6 +49,13 @@ A `purge_before(partition_id, min_lsn)` method will be added.
 - For each segment, it reads the last 8 bytes (the LSN of the last record).
 - If `last_lsn < min_lsn`, the segment file is deleted.
 
+### 6. Segment Pre-allocation
+New segment files are pre-allocated to `segment_size_max` bytes using the Linux `fallocate` syscall with the `FALLOC_FL_KEEP_SIZE` flag. This reserves contiguous disk blocks without changing the file's logical size, so existing `seek(End(-8))` patterns in `read_lsn` and purge logic continue to work correctly. On non-Linux platforms the pre-allocation step is a no-op — correctness is unaffected, only the fragmentation-reduction benefit is lost.
+
+Pre-allocation happens in two places:
+1.  When a new segment is opened for the first time (initial append for a partition).
+2.  When `rotate_segment` creates the next segment file.
+
 ## Risks / Trade-offs
 
 - **File Handle Management**: Active writers hold open handles. Readers only hold handles while actively iterating. We must ensure `WalFile` is dropped correctly on rotation to avoid leaking handles.

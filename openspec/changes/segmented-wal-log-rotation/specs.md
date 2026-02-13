@@ -37,6 +37,17 @@ The system SHALL allow deleting old segments that are no longer required for dat
 - **WHEN** `purge_before(partition_id, min_lsn)` is called
 - **THEN** all segments whose highest LSN is less than `min_lsn` are deleted from disk, provided they are not the active segment.
 
+### Requirement: Segment Pre-allocation
+The system SHALL pre-allocate disk space for new segment files on Linux to reduce fragmentation and avoid mid-write space exhaustion.
+
+#### Scenario: New segment creation on Linux
+- **WHEN** a new segment file is created (either initial or via rotation) on a Linux host
+- **THEN** the system calls `fallocate` with `FALLOC_FL_KEEP_SIZE` to reserve `segment_size_max` bytes of contiguous disk space without changing the file's logical size.
+
+#### Scenario: Non-Linux platform
+- **WHEN** a new segment file is created on a non-Linux platform
+- **THEN** no pre-allocation is performed and the system operates normally without contiguous space reservation.
+
 ## MODIFIED Requirements
 
 ### Requirement: WAL Isolation

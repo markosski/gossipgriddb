@@ -5,6 +5,7 @@
 - [x] 1.1 Update `WalFile` struct to include `segment_index` and `segment_offset`.
 - [x] 1.2 Implement a helper function to generate segment filenames (e.g., `part_1_0000000001.wal`).
 - [x] 1.3 Update `WalLocalFile` to use `SEGMENT_SIZE_MAX` constant for rotation threshold.
+- [x] 1.4 Pre-allocate new segment files to `segment_size_max` on creation using `fallocate(FALLOC_FL_KEEP_SIZE)` on Linux (no-op on other platforms).
 
 ## 2. Segment Discovery & Startup
 
@@ -26,13 +27,13 @@
 
 ## 5. Cleanup Logic
 
-- [ ] 5.1 Implement `purge_before(partition_id, min_lsn)` in `WalLocalFile`.
-- [ ] 5.2 Add logic to check the tail of each segment to determine if its max LSN is eligible for deletion.
-- [ ] 5.3 Ensure the active segment is never deleted by the purge logic.
+- [x] 5.1 Implement `purge_before(partition_id, min_lsn)` in `WalLocalFile`.
+- [x] 5.2 Add logic to check the tail of each segment to determine if its max LSN is eligible for deletion. Mark all eligible segments as deletable and perform deletion.
+- [x] 5.3 Ensure the active segment is never deleted by the purge logic.
 
 ## 6. Testing & Validation
 
-- [ ] 6.1 Add a test case for basic rotation: write enough data to trigger a second segment and verify file existence.
-- [ ] 6.2 Add a test case for chained reading: read records that span across two segments.
-- [ ] 6.3 Add a test case for recovery: restart the WAL and ensure it continues from the latest segment and LSN.
-- [ ] 6.4 Add a test case for purging: verify segments are deleted only when they and all prior segments are below the `min_lsn`.
+- [x] 6.1 Add a test case for basic rotation: write enough data to trigger a second segment and verify file existence.
+- [x] 6.2 Add a test case for chained reading: read records that span across two segments.
+- [x] 6.3 Add a test case for recovery: restart the WAL and ensure it continues from the latest segment and LSN.
+- [x] 6.4 Add a test case for purging: verify segments are deleted only when they and all prior segments are below the `min_lsn`.
