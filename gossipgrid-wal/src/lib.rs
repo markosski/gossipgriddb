@@ -266,8 +266,7 @@ impl WalLocalFile {
     }
 
     /// Create a `WalLocalFile` with a custom segment size limit.
-    /// Primarily intended for testing with small segment sizes.
-    #[cfg(test)]
+    /// Primarily intended for testing and benchmarking with small segment sizes.
     pub async fn with_segment_size_max(
         base_dir: PathBuf,
         truncate: bool,

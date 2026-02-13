@@ -36,6 +36,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Benchmarks
+
+Two benchmark harnesses are included:
+
+```bash
+# Criterion microbenchmarks (append, serialization, read-back)
+# Generates HTML reports in target/criterion/
+cargo bench --package gossipgrid-wal --bench wal_micro
+
+# End-to-end throughput harness (sustained writes, rotation, read-back)
+cargo bench --package gossipgrid-wal --bench wal_throughput
+
+# Customize throughput harness parameters
+BENCH_RECORDS=100000 BENCH_VALUE_SIZE=4096 \
+  cargo bench --package gossipgrid-wal --bench wal_throughput
+```
+
 ## License
 
-MIT OR Apache-2.0
+Apache-2.0

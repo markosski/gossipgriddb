@@ -18,3 +18,17 @@ async-trait = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = ["fs"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
+
+[[bench]]
+name = "wal_micro"
+harness = false
+
+[[bench]]
+name = "wal_throughput"
+harness = false
