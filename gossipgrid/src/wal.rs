@@ -1,5 +1,4 @@
 use bincode::{Decode, Encode};
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Encode, Decode, Clone, Debug, PartialEq)]

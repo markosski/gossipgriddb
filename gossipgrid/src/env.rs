@@ -1,7 +1,7 @@
 use reqwest::Client;
 
 use crate::{
-    event_bus::EventBus, function_registry::FunctionRegistry, storage::WalRecord, store::Store,
+    event_bus::EventBus, function_registry::FunctionRegistry, store::Store, wal::WalRecord,
 };
 use gossipgrid_wal::Wal;
 
