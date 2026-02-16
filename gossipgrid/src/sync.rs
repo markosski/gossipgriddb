@@ -2,16 +2,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::clock::HLC;
 use crate::clock::now_millis;
 use crate::cluster::PartitionId;
 use crate::env::Env;
-use crate::item::{Item, ItemEntry, ItemStatus};
+use crate::item::ItemEntry;
 use crate::node::{self, NodeAddress, NodeId, NodeState};
 use crate::store::{DataStoreError, StorageKey};
+use crate::wal::FramedWalRecordItem;
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
-use gossipgrid_wal::{FramedWalRecord, WalPosition, WalRecord};
+use gossipgrid_wal::WalPosition;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -644,63 +644,6 @@ async fn handle_connection(
     }
 }
 
-pub struct FramedWalRecordItem {
-    pub item: Item,
-    pub lsn: u64,
-    pub partition: PartitionId,
-    pub key_bytes: Vec<u8>,
-}
-
-impl From<FramedWalRecord> for FramedWalRecordItem {
-    fn from(record: FramedWalRecord) -> FramedWalRecordItem {
-        match record {
-            FramedWalRecord {
-                lsn,
-                record:
-                    WalRecord::Put {
-                        partition,
-                        key,
-                        value,
-                        hlc,
-                    },
-            } => FramedWalRecordItem {
-                item: Item {
-                    message: value,
-                    status: ItemStatus::Active,
-                    hlc: HLC {
-                        timestamp: hlc,
-                        counter: 0,
-                    },
-                },
-                lsn,
-                partition: partition.into(),
-                key_bytes: key,
-            },
-            FramedWalRecord {
-                lsn,
-                record:
-                    WalRecord::Delete {
-                        partition,
-                        key,
-                        hlc,
-                    },
-            } => FramedWalRecordItem {
-                item: Item {
-                    message: vec![],
-                    status: ItemStatus::Tombstone(hlc),
-                    hlc: HLC {
-                        timestamp: hlc,
-                        counter: 0,
-                    },
-                },
-                lsn,
-                partition: partition.into(),
-                key_bytes: key,
-            },
-        }
-    }
-}
-
 pub async fn server_handle_request(
     request: SyncRequest,
     addr: SocketAddr,
@@ -721,7 +664,7 @@ pub async fn server_handle_request(
     }
 
     let mut wal_scan_lsn_tracker: HashMap<PartitionId, (u64, WalPosition)> = HashMap::new();
-    let mut items = Vec::new();
+    let mut items: Vec<SyncResponseWalRecord> = Vec::new();
     let mut current_payload_size = 0;
     let wal_lock = env.get_wal();
     let time_now = now_millis();
@@ -794,7 +737,7 @@ pub async fn server_handle_request(
 
                         current_payload_size += framed_item.item.message.len() as u64;
                         items.push(SyncResponseWalRecord {
-                            partition: framed_item.partition,
+                            partition: req_partition.partition,
                             item: ItemEntry {
                                 storage_key,
                                 item: framed_item.item,
@@ -893,6 +836,7 @@ pub async fn server_handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::HLC;
     use crate::cluster::Cluster;
     use crate::gossip::Gossip;
     use crate::node::JoinedNode;

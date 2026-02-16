@@ -8,10 +8,11 @@ use crate::gossip::Gossip;
 use crate::item::{Item, ItemEntry, ItemStatus};
 use crate::node::NodeMetadata;
 use crate::store::{DataStoreError, StorageKey, Store};
-use crate::sync::{FramedWalRecordItem, SyncState};
+use crate::sync::SyncState;
+use crate::wal::{FramedWalRecordItem, WalRecord};
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
-use gossipgrid_wal::{Wal, WalRecord};
+use gossipgrid_wal::Wal;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -470,23 +471,21 @@ impl JoinedNode {
         partition: &PartitionId,
         entry: ItemEntry,
         store: &dyn Store,
-        wal: &dyn Wal,
+        wal: &dyn Wal<WalRecord>,
     ) -> Result<Option<(StorageKey, Vec<(PartitionId, u64)>)>, NodeError> {
         let wal_record = match entry.item.status {
             ItemStatus::Active => WalRecord::Put {
-                partition: (*partition).into(),
                 key: entry.storage_key.to_string().into_bytes(),
                 value: entry.item.message.clone(),
                 hlc: entry.item.hlc.clone().timestamp,
             },
             ItemStatus::Tombstone(_) => WalRecord::Delete {
-                partition: (*partition).into(),
                 key: entry.storage_key.to_string().into_bytes(),
                 hlc: entry.item.hlc.clone().timestamp,
             },
         };
 
-        let wait_requirements = match wal.append(wal_record).await {
+        let wait_requirements = match wal.append((*partition).into(), wal_record).await {
             Ok((lsn, _position)) => {
                 vec![(*partition, lsn)]
             }
@@ -537,7 +536,7 @@ impl JoinedNode {
         partition_count: u16,
         items: I,
         store: &dyn Store,
-        wal: &dyn Wal,
+        wal: &dyn Wal<WalRecord>,
     ) -> Result<(Vec<StorageKey>, Vec<(PartitionId, u64)>, HLC), NodeError>
     where
         I: IntoIterator<Item = ItemEntry>,
@@ -573,7 +572,7 @@ impl JoinedNode {
         &self,
         items: I,
         store: &dyn Store,
-        wal: &dyn Wal,
+        wal: &dyn Wal<WalRecord>,
     ) -> Result<(Vec<StorageKey>, Vec<(PartitionId, u64)>), NodeError>
     where
         I: IntoIterator<Item = ItemEntry>,

@@ -44,6 +44,7 @@ pub(crate) mod gossip;
 #[doc(hidden)]
 pub mod item;
 pub(crate) mod sync;
+pub mod wal;
 #[doc(hidden)]
 pub mod web;
 

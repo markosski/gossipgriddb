@@ -117,7 +117,7 @@ impl NodeRuntime {
 /// let env: Arc<Env> = Arc::new(Env::new(
 ///     store,
 ///     Box::new(
-///         gossipgrid::WalLocalFile::new(std::path::PathBuf::from("<typically_cluster_name>"), true)
+///         gossipgrid_wal::wal::WalLocalFile::new(std::path::PathBuf::from("<typically_cluster_name>"), true, 64 * 1024 * 1024)
 ///             .await
 ///             .unwrap(),
 ///     ),
