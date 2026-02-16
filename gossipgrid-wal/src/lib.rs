@@ -19,8 +19,13 @@ use serde::{Deserialize, Serialize};
 
 pub type Lsn = u64;
 
+// TODO: not a big fan of this, maybe we can parameterize at call site
+#[cfg(not(test))]
 /// Maximum segment size in bytes (64 MB).
 const SEGMENT_SIZE_MAX: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+/// Maximum segment size in bytes (1 KB) for testing.
+const SEGMENT_SIZE_MAX: u64 = 1024;
 
 /// Generate a segment filename, e.g. `part_1_0000000001.wal`
 fn segment_filename(partition: WalPartitionId, segment_index: u64) -> String {
@@ -101,19 +106,9 @@ fn find_segment_for_lsn(
     }
 
     for &(idx, size) in &segments {
-        if size < 8 {
-            continue; // Empty or too-small segment, skip
-        }
-        let path = base_dir.join(segment_filename(partition, idx));
-        if let Ok(mut file) = std::fs::File::open(&path) {
-            if file.seek(SeekFrom::End(-8)).is_ok() {
-                let mut buf = [0u8; 8];
-                if file.read_exact(&mut buf).is_ok() {
-                    let last_lsn = u64::from_le_bytes(buf);
-                    if last_lsn >= target_lsn {
-                        return Some(idx);
-                    }
-                }
+        if let Ok(last_lsn) = read_segment_last_lsn(base_dir, partition, idx, size) {
+            if last_lsn >= target_lsn {
+                return Some(idx);
             }
         }
     }
@@ -121,6 +116,24 @@ fn find_segment_for_lsn(
     // target_lsn is beyond all segments — return the last one so
     // the reader can attempt to read from it (will get EOF).
     segments.last().map(|(idx, _)| *idx)
+}
+
+/// Helper to read the last LSN from a segment file footer.
+fn read_segment_last_lsn(
+    base_dir: &std::path::Path,
+    partition: WalPartitionId,
+    idx: u64,
+    size: u64,
+) -> Result<u64, std::io::Error> {
+    if size < 8 {
+        return Ok(0); // Empty or too-small segment
+    }
+    let path = base_dir.join(segment_filename(partition, idx));
+    let mut file = std::fs::File::open(&path)?;
+    file.seek(SeekFrom::End(-8))?;
+    let mut buf = [0u8; 8];
+    file.read_exact(&mut buf)?;
+    Ok(u64::from_le_bytes(buf))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
@@ -514,6 +527,49 @@ impl WalLocalFile {
         wal_file.segment_offset = 0;
 
         Ok(())
+    }
+
+    /// Delete old WAL segments for a partition whose max LSN is less than `min_lsn`.
+    /// The currently active segment is NEVER deleted.
+    pub async fn purge_before(
+        &self,
+        partition: WalPartitionId,
+        min_lsn: Lsn,
+    ) -> Result<u32, WalError> {
+        let active_idx = if let Some(lock) = self.write_handles.read().await.get(&partition) {
+            lock.lock().await.segment_index
+        } else {
+            0
+        };
+        let segments = find_all_segments(&self.base_dir, partition);
+        let mut deleted_count = 0;
+
+        for (idx, size) in segments {
+            // Never delete the active segment
+            if idx == active_idx {
+                continue;
+            }
+
+            // Check if this segment's max LSN is below min_lsn
+            match read_segment_last_lsn(&self.base_dir, partition, idx, size) {
+                Ok(last_lsn) => {
+                    if last_lsn < min_lsn {
+                        let path = self.base_dir.join(segment_filename(partition, idx));
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            warn!("Failed to delete WAL segment {path:?}: {e}");
+                        } else {
+                            info!("Purged WAL segment: {path:?}");
+                            deleted_count += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to read LSN from segment {idx} during purge: {e}");
+                }
+            }
+        }
+
+        Ok(deleted_count)
     }
 }
 
@@ -925,5 +981,138 @@ mod tests {
 
         // Clean up
         tokio::fs::remove_file(temp_path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_wal_purge() {
+        let test_dir = PathBuf::from("/tmp/test_wal_purge");
+        let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
+        let partition = WalPartitionId(0);
+
+        let record = WalRecord::Put {
+            partition,
+            key: vec![0; 10],
+            value: vec![0; 10],
+            hlc: 0,
+        };
+
+        wal.append(record.clone()).await.unwrap(); // Segment 1
+        assert!(test_dir.join("part_0_0000000001.wal").exists());
+
+        // Since we only have one segment, and it's active, it should NOT be deleted.
+        let deleted = wal.purge_before(partition, 10).await.unwrap();
+        assert_eq!(deleted, 0);
+        assert!(test_dir.join("part_0_0000000001.wal").exists());
+
+        // Manually trigger a rotation to ensure Segment 1 is closed and Segment 2 is active.
+        {
+            let mut handles = wal.write_handles.write().await;
+            let lock = handles.get_mut(&partition).unwrap();
+            let mut wal_file = lock.lock().await;
+            WalLocalFile::rotate_segment(&test_dir, &mut wal_file)
+                .await
+                .unwrap();
+        }
+        // Now Segment 2 is active. Append a record to it.
+        wal.append(record.clone()).await.unwrap(); // LSN 2
+
+        assert!(test_dir.join("part_0_0000000001.wal").exists());
+        assert!(test_dir.join("part_0_0000000002.wal").exists());
+
+        // Purge. Segment 1 has max LSN 1. 1 < 10, so it should be gone.
+        let deleted = wal.purge_before(partition, 10).await.unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!test_dir.join("part_0_0000000001.wal").exists());
+    }
+
+    #[tokio::test]
+    async fn test_wal_rotation() {
+        let test_dir = PathBuf::from("/tmp/test_wal_rotation");
+        let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
+        let partition = WalPartitionId(0);
+
+        let record = WalRecord::Put {
+            partition,
+            key: vec![0; 100],
+            value: vec![0; 100],
+            hlc: 0,
+        };
+
+        // Write ~6 records to exceed 1KB (each record is > 200 bytes)
+        for _ in 0..6 {
+            wal.append(record.clone()).await.unwrap();
+        }
+
+        assert!(test_dir.join("part_0_0000000001.wal").exists());
+        assert!(test_dir.join("part_0_0000000002.wal").exists());
+    }
+
+    #[tokio::test]
+    async fn test_wal_chained_reading() {
+        let test_dir = PathBuf::from("/tmp/test_wal_chained_reading");
+        let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
+        let partition = WalPartitionId(0);
+
+        let record = WalRecord::Put {
+            partition,
+            key: vec![0; 100],
+            value: vec![0; 100],
+            hlc: 0,
+        };
+
+        // Write 10 records to span multiple segments
+        for i in 0..10 {
+            let mut rec = record.clone();
+            if let WalRecord::Put { hlc, .. } = &mut rec {
+                *hlc = i as u64;
+            }
+            wal.append(rec).await.unwrap();
+        }
+
+        // Stream all records from LSN 0
+        let all: Vec<_> = wal.stream_from_lsn(0, partition, false).await.collect();
+        assert_eq!(all.len(), 10);
+
+        // Verify sequence
+        for (i, res) in all.into_iter().enumerate() {
+            let (framed, _) = res.unwrap();
+            assert_eq!(framed.lsn, (i + 1) as u64);
+            if let WalRecord::Put { hlc, .. } = framed.record {
+                assert_eq!(hlc, i as u64);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_wal_recovery() {
+        let test_dir = PathBuf::from("/tmp/test_wal_recovery");
+        let partition = WalPartitionId(0);
+        let record = WalRecord::Put {
+            partition,
+            key: b"data".to_vec(),
+            value: b"value".to_vec(),
+            hlc: 123,
+        };
+
+        {
+            let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
+            wal.append(record.clone()).await.unwrap();
+            wal.append(record.clone()).await.unwrap();
+            // Ensure data is synced
+            wal.io_sync().await.unwrap();
+        }
+
+        // Simulate restart
+        {
+            let wal = WalLocalFile::new(test_dir.clone(), false).await.unwrap();
+            let (lsn, pos) = wal.append(record.clone()).await.unwrap();
+
+            // Should have resumed after LSN 2
+            assert_eq!(lsn, 3);
+            assert_eq!(pos.segment_index, 1);
+
+            let all: Vec<_> = wal.stream_from_lsn(0, partition, false).await.collect();
+            assert_eq!(all.len(), 3);
+        }
     }
 }
