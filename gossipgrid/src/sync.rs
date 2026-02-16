@@ -2,14 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::clock::HLC;
 use crate::clock::now_millis;
 use crate::cluster::PartitionId;
 use crate::env::Env;
-use crate::item::{Item, ItemEntry, ItemStatus};
+use crate::item::ItemEntry;
 use crate::node::{self, NodeAddress, NodeId, NodeState};
 use crate::store::{DataStoreError, StorageKey};
-use crate::wal::WalRecord;
+use crate::wal::{FramedWalRecordItem, WalRecord};
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
 use gossipgrid_wal::{FramedWalRecord, WalPosition};
@@ -645,52 +644,6 @@ async fn handle_connection(
     }
 }
 
-pub struct FramedWalRecordItem {
-    pub item: Item,
-    pub lsn: u64,
-    pub partition: PartitionId,
-    pub key_bytes: Vec<u8>,
-}
-
-impl From<FramedWalRecord<WalRecord>> for FramedWalRecordItem {
-    fn from(record: FramedWalRecord<WalRecord>) -> FramedWalRecordItem {
-        match record {
-            FramedWalRecord {
-                lsn,
-                record: WalRecord::Put { key, value, hlc },
-            } => FramedWalRecordItem {
-                item: Item {
-                    message: value,
-                    status: ItemStatus::Active,
-                    hlc: HLC {
-                        timestamp: hlc,
-                        counter: 0,
-                    },
-                },
-                lsn,
-                partition: PartitionId(0), // set by caller
-                key_bytes: key,
-            },
-            FramedWalRecord {
-                lsn,
-                record: WalRecord::Delete { key, hlc },
-            } => FramedWalRecordItem {
-                item: Item {
-                    message: vec![],
-                    status: ItemStatus::Tombstone(hlc),
-                    hlc: HLC {
-                        timestamp: hlc,
-                        counter: 0,
-                    },
-                },
-                lsn,
-                partition: PartitionId(0), // set by caller
-                key_bytes: key,
-            },
-        }
-    }
-}
-
 pub async fn server_handle_request(
     request: SyncRequest,
     addr: SocketAddr,
@@ -745,11 +698,11 @@ pub async fn server_handle_request(
             let is_exclusive = last_lsn > 0;
             let iter: Box<
                 dyn Iterator<
-                        Item = Result<
-                            (FramedWalRecord<WalRecord>, WalPosition),
-                            gossipgrid_wal::WalError,
-                        >,
-                    > + '_,
+                    Item = Result<
+                        (FramedWalRecord<WalRecord>, WalPosition),
+                        gossipgrid_wal::WalError,
+                    >,
+                >,
             > = wal_lock
                 .stream_from(
                     last_lsn,
@@ -767,8 +720,7 @@ pub async fn server_handle_request(
                 match record {
                     Ok((framed_record, position)) => {
                         data_found_in_this_iteration = true;
-                        let mut framed_item: FramedWalRecordItem = framed_record.into();
-                        framed_item.partition = req_partition.partition;
+                        let framed_item: FramedWalRecordItem = framed_record.into();
 
                         wal_scan_lsn_tracker
                             .entry(req_partition.partition)
@@ -792,7 +744,7 @@ pub async fn server_handle_request(
 
                         current_payload_size += framed_item.item.message.len() as u64;
                         items.push(SyncResponseWalRecord {
-                            partition: framed_item.partition,
+                            partition: req_partition.partition,
                             item: ItemEntry {
                                 storage_key,
                                 item: framed_item.item,
@@ -891,6 +843,7 @@ pub async fn server_handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::HLC;
     use crate::cluster::Cluster;
     use crate::gossip::Gossip;
     use crate::node::JoinedNode;
