@@ -487,7 +487,7 @@ impl JoinedNode {
         };
 
         let wait_requirements = match wal.append(wal_record).await {
-            Ok((lsn, _lsn_offset)) => {
+            Ok((lsn, _position)) => {
                 vec![(*partition, lsn)]
             }
             Err(e) => {
@@ -794,15 +794,13 @@ impl JoinedNode {
                 let wal = env.get_wal();
                 let store = env.get_store();
                 let lsn_accum = 0;
-                let offset_accum = 0;
 
-                // stream_from is async but returns a sync iterator
-                let stream =
-                    rt.block_on(wal.stream_from(lsn_accum, offset_accum, partition.into(), false));
+                // stream_from_lsn is async but returns a sync iterator
+                let stream = rt.block_on(wal.stream_from_lsn(lsn_accum, partition.into(), false));
 
                 for record_result in stream {
                     match record_result {
-                        Ok((record, _offset)) => {
+                        Ok((record, _position)) => {
                             let framed_item: FramedWalRecordItem = record.into();
                             let storage_key: StorageKey =
                                 match String::from_utf8(framed_item.key_bytes)

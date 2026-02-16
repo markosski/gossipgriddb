@@ -11,7 +11,7 @@ use crate::node::{self, NodeAddress, NodeId, NodeState};
 use crate::store::{DataStoreError, StorageKey};
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
-use gossipgrid_wal::{FramedWalRecord, WalRecord};
+use gossipgrid_wal::{FramedWalRecord, WalPosition, WalRecord};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -64,7 +64,7 @@ impl SyncState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LsnOffset {
     pub lsn: u64,
-    pub offset: u64,
+    pub position: WalPosition,
 }
 
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
@@ -78,7 +78,7 @@ pub struct SyncRequest {
 pub struct SyncRequestPartition {
     pub partition: PartitionId,
     pub lsn: u64,
-    pub offset: u64,
+    pub position: WalPosition,
 }
 
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
@@ -86,7 +86,7 @@ pub struct SyncResponseWalRecord {
     pub partition: PartitionId,
     pub item: ItemEntry,
     pub lsn: u64,
-    pub offset: u64,
+    pub position: WalPosition,
 }
 
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize)]
@@ -211,7 +211,7 @@ pub async fn client_send_sync_request_task(
                                 let request_partition = SyncRequestPartition {
                                     partition,
                                     lsn: lsn_offset.lsn,
-                                    offset: lsn_offset.offset,
+                                    position: lsn_offset.position,
                                 };
                                 request.partitions.push(request_partition);
                             } else {
@@ -221,7 +221,7 @@ pub async fn client_send_sync_request_task(
                                         partitions: vec![SyncRequestPartition {
                                             partition,
                                             lsn: lsn_offset.lsn,
-                                            offset: lsn_offset.offset,
+                                            position: lsn_offset.position,
                                         }],
                                         scan_timeout_millis,
                                         max_size_bytes,
@@ -497,13 +497,13 @@ async fn client_handle_sync_response(
                             if record.lsn > x.lsn {
                                 *x = LsnOffset {
                                     lsn: record.lsn,
-                                    offset: record.offset,
+                                    position: record.position,
                                 };
                             }
                         })
                         .or_insert(LsnOffset {
                             lsn: record.lsn,
-                            offset: record.offset,
+                            position: record.position,
                         });
                 }
 
@@ -720,7 +720,7 @@ pub async fn server_handle_request(
         }
     }
 
-    let mut wal_scan_lsn_tracker: HashMap<PartitionId, (u64, u64)> = HashMap::new();
+    let mut wal_scan_lsn_tracker: HashMap<PartitionId, (u64, WalPosition)> = HashMap::new();
     let mut items = Vec::new();
     let mut current_payload_size = 0;
     let wal_lock = env.get_wal();
@@ -742,12 +742,11 @@ pub async fn server_handle_request(
                 continue;
             }
 
-            let (last_lsn, last_offset) = {
-                if let Some((lsn, offset)) = wal_scan_lsn_tracker.get_mut(&req_partition.partition)
-                {
-                    (*lsn, *offset)
+            let (last_lsn, last_position) = {
+                if let Some((lsn, pos)) = wal_scan_lsn_tracker.get_mut(&req_partition.partition) {
+                    (*lsn, *pos)
                 } else {
-                    let result = (req_partition.lsn, req_partition.offset);
+                    let result = (req_partition.lsn, req_partition.position);
                     wal_scan_lsn_tracker.insert(req_partition.partition, result);
                     result
                 }
@@ -757,7 +756,7 @@ pub async fn server_handle_request(
             let iter = wal_lock
                 .stream_from(
                     last_lsn,
-                    last_offset,
+                    last_position,
                     req_partition.partition.into(),
                     is_exclusive,
                 )
@@ -769,7 +768,7 @@ pub async fn server_handle_request(
                 }
 
                 match record {
-                    Ok((framed_record, offset)) => {
+                    Ok((framed_record, position)) => {
                         data_found_in_this_iteration = true;
                         let framed_item: FramedWalRecordItem = framed_record.into();
 
@@ -777,7 +776,7 @@ pub async fn server_handle_request(
                             .entry(req_partition.partition)
                             .and_modify(|pair| {
                                 if framed_item.lsn > pair.0 {
-                                    *pair = (framed_item.lsn, offset);
+                                    *pair = (framed_item.lsn, position);
                                 }
                             });
 
@@ -801,7 +800,7 @@ pub async fn server_handle_request(
                                 item: framed_item.item,
                             },
                             lsn: framed_item.lsn,
-                            offset,
+                            position,
                         });
                     }
                     Err(e) => {
@@ -953,7 +952,7 @@ mod tests {
             p1,
             LsnOffset {
                 lsn: 1000,
-                offset: 0,
+                position: WalPosition::default(),
             },
         );
         joined_node.sync_state.leader_tip_lsns.insert(p1, 1050); // Delta 50 < 100
@@ -1034,7 +1033,7 @@ mod tests {
             p1,
             LsnOffset {
                 lsn: 1000,
-                offset: 0,
+                position: WalPosition::default(),
             },
         );
         joined_node.sync_state.leader_tip_lsns.insert(p1, 1050);
@@ -1043,7 +1042,7 @@ mod tests {
             p2,
             LsnOffset {
                 lsn: 500,
-                offset: 0,
+                position: WalPosition::default(),
             },
         );
         joined_node.sync_state.leader_tip_lsns.insert(p2, 1000); // Delta 500 > 100
@@ -1099,7 +1098,7 @@ mod tests {
             p1,
             LsnOffset {
                 lsn: 1000,
-                offset: 0,
+                position: WalPosition::default(),
             },
         );
 

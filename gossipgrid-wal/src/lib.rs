@@ -87,6 +87,42 @@ fn find_all_segments(base_dir: &std::path::Path, partition: WalPartitionId) -> V
     segments
 }
 
+/// Find the segment that contains `target_lsn` by reading the last-LSN footer
+/// of each segment file. Returns the segment index whose last LSN is >= target_lsn.
+/// Used by the LSN-only convenience reader.
+fn find_segment_for_lsn(
+    base_dir: &std::path::Path,
+    partition: WalPartitionId,
+    target_lsn: Lsn,
+) -> Option<u64> {
+    let segments = find_all_segments(base_dir, partition);
+    if segments.is_empty() {
+        return None;
+    }
+
+    for &(idx, size) in &segments {
+        if size < 8 {
+            continue; // Empty or too-small segment, skip
+        }
+        let path = base_dir.join(segment_filename(partition, idx));
+        if let Ok(mut file) = std::fs::File::open(&path) {
+            if file.seek(SeekFrom::End(-8)).is_ok() {
+                let mut buf = [0u8; 8];
+                if file.read_exact(&mut buf).is_ok() {
+                    let last_lsn = u64::from_le_bytes(buf);
+                    if last_lsn >= target_lsn {
+                        return Some(idx);
+                    }
+                }
+            }
+        }
+    }
+
+    // target_lsn is beyond all segments — return the last one so
+    // the reader can attempt to read from it (will get EOF).
+    segments.last().map(|(idx, _)| *idx)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
 pub struct WalPartitionId(pub u16);
 
@@ -105,6 +141,30 @@ impl std::fmt::Display for WalPartitionId {
 impl From<u16> for WalPartitionId {
     fn from(value: u16) -> Self {
         WalPartitionId(value)
+    }
+}
+
+/// A position within the segmented WAL, combining segment identity with
+/// a byte offset local to that segment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
+pub struct WalPosition {
+    pub segment_index: u64,
+    pub local_offset: u64,
+}
+
+impl WalPosition {
+    pub fn new(segment_index: u64, local_offset: u64) -> Self {
+        Self {
+            segment_index,
+            local_offset,
+        }
+    }
+
+    pub fn zero() -> Self {
+        Self {
+            segment_index: 0,
+            local_offset: 0,
+        }
     }
 }
 
@@ -131,13 +191,26 @@ pub struct FramedWalRecord {
 
 #[async_trait::async_trait]
 pub trait WalReader: Send + Sync {
+    /// Read records starting from a specific segment position.
+    /// This is the precise, segment-aware reader used by the sync protocol.
     async fn stream_from(
         &self,
         from_lsn: Lsn,
-        from_offset: u64,
+        from_position: WalPosition,
         partition: WalPartitionId,
         is_exclusive: bool,
-    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, u64), WalError>> + '_>;
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_>;
+
+    /// Read records starting from a given LSN.
+    /// Convenience method that locates the correct segment automatically
+    /// by scanning segment LSN footers. Slightly slower on first call
+    /// but does not require the caller to track segment positions.
+    async fn stream_from_lsn(
+        &self,
+        from_lsn: Lsn,
+        partition: WalPartitionId,
+        is_exclusive: bool,
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_>;
 
     async fn get_lsn_watcher(
         &self,
@@ -147,7 +220,7 @@ pub trait WalReader: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait WalWriter: Send + Sync {
-    async fn append(&self, rec: WalRecord) -> Result<(u64, u64), WalError>;
+    async fn append(&self, rec: WalRecord) -> Result<(Lsn, WalPosition), WalError>;
     async fn io_sync(&self) -> Result<(), WalError>;
 }
 
@@ -166,9 +239,10 @@ pub struct WalLocalFile {
 pub struct WalFile {
     buffer: tokio::io::BufWriter<tokio::fs::File>,
     current_lsn: u64,
-    current_offset: u64,
     partition: WalPartitionId,
     segment_index: u64,
+    /// Bytes written to the current segment file. Also serves as the
+    /// local file offset for the next write.
     segment_offset: u64,
 }
 
@@ -231,7 +305,7 @@ impl WalWriter for WalLocalFile {
         Ok(())
     }
 
-    async fn append(&self, rec: WalRecord) -> Result<(u64, u64), WalError> {
+    async fn append(&self, rec: WalRecord) -> Result<(Lsn, WalPosition), WalError> {
         let partition = match rec {
             WalRecord::Put { partition, .. } => partition,
             WalRecord::Delete { partition, .. } => partition,
@@ -261,17 +335,20 @@ impl WalWriter for WalLocalFile {
                 let seg_name = segment_filename(partition, seg_index);
                 let writer_path = format!("{base_str}/{seg_name}");
 
-                // Open the file first to get latest LSN and offset
-                let (lsn, offset) = if self.truncate_at_start {
-                    (0, 0)
+                // Open the file first to get latest LSN
+                let lsn = if self.truncate_at_start {
+                    0
                 } else {
                     match tokio::fs::File::open(&writer_path).await {
-                        Ok(mut file) => WalLocalFile::read_lsn(&mut file).await.unwrap_or((0, 0)),
+                        Ok(mut file) => WalLocalFile::read_lsn(&mut file)
+                            .await
+                            .map(|(lsn, _)| lsn)
+                            .unwrap_or(0),
                         Err(e) => {
                             warn!(
-                                "Failed to open WAL file, assuming fresh cluster, using (0, 0) : {e}"
+                                "Failed to open WAL file, assuming fresh cluster, using lsn 0 : {e}"
                             );
-                            (0, 0)
+                            0
                         }
                     }
                 };
@@ -281,7 +358,6 @@ impl WalWriter for WalLocalFile {
                 let wal_file = WalFile {
                     buffer: tokio::io::BufWriter::new(file_write),
                     current_lsn: lsn,
-                    current_offset: offset,
                     partition,
                     segment_index: seg_index,
                     segment_offset: seg_size,
@@ -295,7 +371,6 @@ impl WalWriter for WalLocalFile {
 
         let mut wal_file_write = wal_file_lock.lock().await;
         let current_lsn = wal_file_write.current_lsn;
-        let current_offset = wal_file_write.current_offset;
 
         let new_lsn = current_lsn
             .checked_add(1)
@@ -318,27 +393,26 @@ impl WalWriter for WalLocalFile {
             WalLocalFile::rotate_segment(&self.base_dir, &mut wal_file_write).await?;
         }
 
-        let (lsn, offset) = WalLocalFile::write_data(
-            &mut wal_file_write.buffer,
-            &payload,
-            new_lsn,
-            current_offset,
-        )
-        .await?;
+        let segment_offset_before = wal_file_write.segment_offset;
+        WalLocalFile::write_data(&mut wal_file_write.buffer, &payload, new_lsn).await?;
 
-        wal_file_write.current_offset = offset;
-        wal_file_write.current_lsn = lsn;
         wal_file_write.segment_offset += record_size;
+        wal_file_write.current_lsn = new_lsn;
+
+        let position = WalPosition {
+            segment_index: wal_file_write.segment_index,
+            local_offset: segment_offset_before + record_size,
+        };
 
         // Also update watchers
         {
             let map = self.lsn_watchers.read().await;
             if let Some(sender) = map.get(&partition) {
-                let _ = sender.send(lsn);
+                let _ = sender.send(new_lsn);
             }
         }
 
-        Ok((lsn, offset))
+        Ok((new_lsn, position))
     }
 }
 
@@ -368,16 +442,11 @@ impl WalLocalFile {
     /// * `buffer` - mutable reference to buffer writer
     /// * `payload` - record data to write
     /// * `lsn` - LSN of the record
-    /// * `offset` - offset of the record
-    ///
-    /// # Returns
-    /// Tuple of LSN and offset
     async fn write_data(
         buffer: &mut BufWriter<File>,
         payload: &[u8],
         lsn: u64,
-        offset: u64,
-    ) -> Result<(u64, u64), WalError> {
+    ) -> Result<(), WalError> {
         let len: u32 = payload.len() as u32;
 
         // Combine length, payload, and LSN into a single buffer for a more atomic write
@@ -396,7 +465,7 @@ impl WalLocalFile {
             .await
             .map_err(|e| WalError::GeneralError(e.to_string()))?;
 
-        Ok((lsn, offset + 8 + 4 + len as u64))
+        Ok(())
     }
 
     /// Rotate the current WAL segment: flush, sync, close, and open a new segment file.
@@ -450,23 +519,25 @@ impl WalLocalFile {
 
 #[async_trait::async_trait]
 impl WalReader for WalLocalFile {
-    /// Scan WAL file from a specific LSN and offset
+    /// Scan WAL records starting from a specific segment position.
     ///
     /// # Arguments
-    /// * `from_lsn` - LSN to start reading from
-    /// * `from_offset` - offset to start reading from
+    /// * `from_lsn` - LSN used for validation and inclusive/exclusive filtering
+    /// * `from_position` - segment index and local byte offset to seek to
     /// * `partition` - partition to read from
     /// * `is_exclusive` - whether to read exclusive of the LSN
     ///
     /// # Returns
-    /// Tuple of FramedWalRecord and end offset (used to read next record)
+    /// Iterator yielding `(FramedWalRecord, WalPosition)` where `WalPosition`
+    /// is the position *after* this record (can be passed to stream_from for
+    /// the next read).
     async fn stream_from(
         &self,
         from_lsn: u64,
-        from_offset: u64,
+        from_position: WalPosition,
         partition: WalPartitionId,
         is_exclusive: bool,
-    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, u64), WalError>> + '_> {
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_> {
         let base_dir_str = match self.base_dir.to_str() {
             Some(s) => s,
             None => {
@@ -476,58 +547,41 @@ impl WalReader for WalLocalFile {
             }
         };
 
-        // Discover all segments for this partition, sorted by index.
-        let segments = find_all_segments(&self.base_dir, partition);
-
-        // Determine the starting segment index and local file offset.
-        // `from_offset` is a global offset across all segments.  We walk
-        // the ordered segment list, accumulating sizes, to find which
-        // segment contains `from_offset`.
-        let (start_seg_pos, local_offset) = if from_offset == 0 || segments.is_empty() {
-            // Start from the very first segment at file position 0.
-            (0usize, 0u64)
-        } else {
-            let mut cumulative: u64 = 0;
-            let mut found = None;
-            for (i, &(_idx, size)) in segments.iter().enumerate() {
-                if cumulative + size > from_offset {
-                    found = Some((i, from_offset - cumulative));
-                    break;
+        // Determine the starting segment index and local offset.
+        let (start_seg_index, local_offset) = if from_position.segment_index == 0 {
+            // segment_index 0 means "start from the first available segment"
+            let segments = find_all_segments(&self.base_dir, partition);
+            if segments.is_empty() {
+                // No segments exist yet — ensure the first segment file is created.
+                if let Err(e) = std::fs::create_dir_all(&self.base_dir) {
+                    return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
+                        "Failed to create WAL directory: {e}"
+                    )))));
                 }
-                cumulative += size;
+                let path = format!("{base_dir_str}/{}", segment_filename(partition, 1));
+                if let Err(e) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .open(&path)
+                {
+                    return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
+                        "Failed to create WAL file: {e}"
+                    )))));
+                }
+                (1u64, 0u64)
+            } else {
+                (segments[0].0, 0u64)
             }
-            // If the offset is exactly at the end of the last segment,
-            // position to the next (possibly non-existent yet) segment at 0.
-            found.unwrap_or((segments.len(), 0))
+        } else {
+            (from_position.segment_index, from_position.local_offset)
         };
 
-        // Build the initial list of segment indices we will iterate through.
-        let mut seg_indices: Vec<u64> = segments
-            .iter()
-            .skip(start_seg_pos)
-            .map(|&(idx, _)| idx)
-            .collect();
-
-        // If there are no segments at all, create the first segment file so
-        // the empty-iterator path still works correctly.
-        if seg_indices.is_empty() {
-            if let Err(e) = std::fs::create_dir_all(&self.base_dir) {
-                return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
-                    "Failed to create WAL directory: {e}"
-                )))));
-            }
-            let path = format!("{base_dir_str}/{}", segment_filename(partition, 1));
-            if let Err(e) = std::fs::File::create(&path) {
-                return Box::new(std::iter::once(Err(WalError::GeneralError(format!(
-                    "Failed to create WAL file: {e}"
-                )))));
-            }
-            seg_indices.push(1);
-        }
-
-        // Open the first segment file and seek to local_offset.
-        let first_idx = seg_indices[0];
-        let first_path = format!("{base_dir_str}/{}", segment_filename(partition, first_idx));
+        // Open the starting segment file and seek to local_offset.
+        let first_path = format!(
+            "{base_dir_str}/{}",
+            segment_filename(partition, start_seg_index)
+        );
         let file = match std::fs::File::open(&first_path) {
             Ok(f) => f,
             Err(e) => {
@@ -546,9 +600,10 @@ impl WalReader for WalLocalFile {
         }
 
         // State for the chained iterator.
-        let mut current_offset = from_offset; // global offset
-        let mut seg_cursor = 0usize; // position within seg_indices
-        let mut current_seg_index = first_idx;
+        let mut current_local_offset = local_offset;
+        let mut current_seg_index = start_seg_index;
+        let is_first_record = from_position.local_offset > 0;
+        let mut first_record_checked = false;
         let base_dir_owned = self.base_dir.clone();
 
         let iter = std::iter::from_fn(move || {
@@ -563,18 +618,8 @@ impl WalReader for WalLocalFile {
                         match reader.read(&mut len_buf[bytes_read..]) {
                             Ok(0) => {
                                 if bytes_read == 0 {
-                                    // TODO: skip to proper segment based on LSN/offset
                                     // Clean EOF on this segment – try the next one.
-                                    seg_cursor += 1;
-
-                                    // Check if the next segment index is known.
-                                    let next_index = if seg_cursor < seg_indices.len() {
-                                        seg_indices[seg_cursor]
-                                    } else {
-                                        // Speculatively try index + 1 (the writer
-                                        // may have rotated since we scanned).
-                                        current_seg_index + 1
-                                    };
+                                    let next_index = current_seg_index + 1;
 
                                     let next_name = segment_filename(partition, next_index);
                                     let next_path = format!(
@@ -587,10 +632,7 @@ impl WalReader for WalLocalFile {
                                         Ok(f) => {
                                             reader = std::io::BufReader::new(f);
                                             current_seg_index = next_index;
-                                            // Update seg_indices if we discovered a new segment.
-                                            if seg_cursor >= seg_indices.len() {
-                                                seg_indices.push(next_index);
-                                            }
+                                            current_local_offset = 0;
                                             continue; // retry read from new reader
                                         }
                                         Err(_) => return None, // no more segments
@@ -604,7 +646,7 @@ impl WalReader for WalLocalFile {
                             Ok(n) => bytes_read += n,
                             Err(e) => {
                                 return Some(Err(WalError::GeneralError(format!(
-                                    "error: {e}, for partition: {partition}, offset: {current_offset}, lsn: {from_lsn}",
+                                    "error: {e}, for partition: {partition}, segment: {current_seg_index}, offset: {current_local_offset}, lsn: {from_lsn}",
                                 ))));
                             }
                         }
@@ -620,7 +662,7 @@ impl WalReader for WalLocalFile {
                             return None; // Partial record at EOF
                         }
                         return Some(Err(WalError::GeneralError(format!(
-                            "failed to read entire payload content into buffer, {e}, for partition: {partition}, offset: {current_offset}, current lsn: {from_lsn}, len: {len}",
+                            "failed to read entire payload content into buffer, {e}, for partition: {partition}, segment: {current_seg_index}, offset: {current_local_offset}, current lsn: {from_lsn}, len: {len}",
                         ))));
                     }
                     payload_buf
@@ -634,17 +676,21 @@ impl WalReader for WalLocalFile {
                             return None; // Partial record at EOF
                         }
                         return Some(Err(WalError::GeneralError(format!(
-                            "failed to read entire lsn into buffer, {e}, for partition: {partition}, offset: {current_offset}, current lsn: {from_lsn}",
+                            "failed to read entire lsn into buffer, {e}, for partition: {partition}, segment: {current_seg_index}, offset: {current_local_offset}, current lsn: {from_lsn}",
                         ))));
                     }
                     u64::from_le_bytes(lsn_buf)
                 };
 
-                // Verify LSN and offset match (same as before).
-                if from_offset > 0 && from_offset == current_offset && (lsn - from_lsn) != 1 {
-                    return Some(Err(WalError::LsnOffsetMismatch(format!(
-                        "LSN mismatch in WAL file partition: {partition}, from lsn: {from_lsn}, from offset: {from_offset}, current lsn: {lsn}, current offset: {current_offset}",
-                    ))));
+                // Verify LSN continuity on the first record when resuming from a position.
+                if is_first_record && !first_record_checked {
+                    first_record_checked = true;
+                    if lsn != from_lsn + 1 {
+                        return Some(Err(WalError::LsnOffsetMismatch(format!(
+                            "LSN mismatch in WAL file partition: {partition}, from lsn: {from_lsn}, segment: {}, offset: {}, current lsn: {lsn}",
+                            from_position.segment_index, from_position.local_offset,
+                        ))));
+                    }
                 }
 
                 let (framed, _) = match bincode::decode_from_slice::<FramedWalRecord, _>(
@@ -660,15 +706,41 @@ impl WalReader for WalLocalFile {
                 };
 
                 let record_len = (8 + 4 + len) as u64;
-                current_offset += record_len;
+                current_local_offset += record_len;
+
+                let position = WalPosition {
+                    segment_index: current_seg_index,
+                    local_offset: current_local_offset,
+                };
 
                 if (is_exclusive && lsn > from_lsn) || (!is_exclusive && lsn >= from_lsn) {
-                    return Some(Ok((framed, current_offset)));
+                    return Some(Ok((framed, position)));
                 }
                 // else: skip and keep looping
             }
         });
         Box::new(iter)
+    }
+
+    /// Convenience method: read records starting from a given LSN.
+    /// Scans segment LSN footers to find the correct starting segment.
+    async fn stream_from_lsn(
+        &self,
+        from_lsn: u64,
+        partition: WalPartitionId,
+        is_exclusive: bool,
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_> {
+        let position = if from_lsn == 0 {
+            WalPosition::zero()
+        } else {
+            match find_segment_for_lsn(&self.base_dir, partition, from_lsn) {
+                Some(seg_idx) => WalPosition::new(seg_idx, 0),
+                None => WalPosition::zero(),
+            }
+        };
+
+        self.stream_from(from_lsn, position, partition, is_exclusive)
+            .await
     }
 
     async fn get_lsn_watcher(
@@ -727,52 +799,108 @@ mod tests {
             hlc: 0,
         };
 
-        let (lsn, offset) = wal.append(record1.clone()).await.unwrap();
+        let (lsn, pos) = wal.append(record1.clone()).await.unwrap();
         assert_eq!(lsn, 1);
-        assert_eq!(offset, 26);
+        assert_eq!(pos.local_offset, 26);
+        assert_eq!(pos.segment_index, 1);
 
-        let (lsn, offset) = wal.append(record2.clone()).await.unwrap();
+        let (lsn, pos) = wal.append(record2.clone()).await.unwrap();
         assert_eq!(lsn, 2);
-        assert_eq!(offset, 54);
+        assert_eq!(pos.local_offset, 54);
+        assert_eq!(pos.segment_index, 1);
 
-        let (record, offset) = wal
-            .stream_from(1, 0, WalPartitionId(0), false)
+        // Read from the beginning (non-exclusive)
+        let (record, pos) = wal
+            .stream_from(1, WalPosition::zero(), WalPartitionId(0), false)
             .await
             .next()
             .unwrap()
             .unwrap();
         assert_eq!(record.lsn, 1);
         assert_eq!(record.record, record1);
-        assert_eq!(offset, 26);
+        assert_eq!(pos.local_offset, 26);
 
-        let (record, offset) = wal
-            .stream_from(1, 0, WalPartitionId(0), true)
+        // Read from the beginning (exclusive — skip LSN 1)
+        let (record, pos) = wal
+            .stream_from(1, WalPosition::zero(), WalPartitionId(0), true)
             .await
             .next()
             .unwrap()
             .unwrap();
         assert_eq!(record.lsn, 2);
         assert_eq!(record.record, record2);
-        assert_eq!(offset, 54);
+        assert_eq!(pos.local_offset, 54);
 
-        // Uses offset instead of fast forward to LSN
-        let (record, offset) = wal
-            .stream_from(1, 26, WalPartitionId(0), true)
+        // Resume from a specific position (segment 1, offset 26)
+        let (record, pos) = wal
+            .stream_from(1, WalPosition::new(1, 26), WalPartitionId(0), true)
             .await
             .next()
             .unwrap()
             .unwrap();
         assert_eq!(record.lsn, 2);
         assert_eq!(record.record, record2);
-        assert_eq!(offset, 54);
+        assert_eq!(pos.local_offset, 54);
 
-        // Unhappy Path: Uses offset instead of fast forward to LSN
-        let record = wal.stream_from(1, 25, WalPartitionId(0), true).await.next();
-
+        // Unhappy Path: wrong offset — read lands in garbage, should return None
+        let record = wal
+            .stream_from(1, WalPosition::new(1, 25), WalPartitionId(0), true)
+            .await
+            .next();
         assert!(record.is_none());
 
-        let record = wal.stream_from(2, 0, WalPartitionId(0), true).await.next();
+        // Exclusive past last record — nothing to read
+        let record = wal
+            .stream_from(2, WalPosition::zero(), WalPartitionId(0), true)
+            .await
+            .next();
         assert!(record.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stream_from_lsn() {
+        let wal = WalLocalFile::new(PathBuf::from("/tmp/test_stream_from_lsn"), true)
+            .await
+            .unwrap();
+
+        let record1 = WalRecord::Put {
+            partition: WalPartitionId(0),
+            key: b"key1".to_vec(),
+            value: b"val1".to_vec(),
+            hlc: 0,
+        };
+        let record2 = WalRecord::Put {
+            partition: WalPartitionId(0),
+            key: b"key2".to_vec(),
+            value: b"val2".to_vec(),
+            hlc: 0,
+        };
+        let record3 = WalRecord::Put {
+            partition: WalPartitionId(0),
+            key: b"key3".to_vec(),
+            value: b"val3".to_vec(),
+            hlc: 0,
+        };
+
+        wal.append(record1.clone()).await.unwrap();
+        wal.append(record2.clone()).await.unwrap();
+        wal.append(record3.clone()).await.unwrap();
+
+        // stream_from_lsn with lsn=0 should read all
+        let all: Vec<_> = wal
+            .stream_from_lsn(0, WalPartitionId(0), false)
+            .await
+            .collect::<Vec<_>>();
+        assert_eq!(all.len(), 3);
+
+        // stream_from_lsn with lsn=2, exclusive should give only record 3
+        let from2: Vec<_> = wal
+            .stream_from_lsn(2, WalPartitionId(0), true)
+            .await
+            .collect::<Vec<_>>();
+        assert_eq!(from2.len(), 1);
+        let (rec, _) = from2[0].as_ref().unwrap();
+        assert_eq!(rec.lsn, 3);
     }
 
     #[tokio::test]
