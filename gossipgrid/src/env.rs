@@ -14,7 +14,11 @@ pub struct Env {
 }
 
 impl Env {
-    pub fn new(store: Box<dyn Store>, wal: Box<dyn Wal<WalRecord>>, event_bus: EventBus) -> Self {
+    pub fn new(
+        store: Box<dyn Store + Send + Sync>,
+        wal: Box<dyn Wal<WalRecord> + Send + Sync>,
+        event_bus: EventBus,
+    ) -> Self {
         Env {
             store,
             wal,

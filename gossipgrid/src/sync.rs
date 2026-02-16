@@ -8,10 +8,10 @@ use crate::env::Env;
 use crate::item::ItemEntry;
 use crate::node::{self, NodeAddress, NodeId, NodeState};
 use crate::store::{DataStoreError, StorageKey};
-use crate::wal::{FramedWalRecordItem, WalRecord};
+use crate::wal::FramedWalRecordItem;
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
-use gossipgrid_wal::{FramedWalRecord, WalPosition};
+use gossipgrid_wal::WalPosition;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -696,14 +696,7 @@ pub async fn server_handle_request(
             };
 
             let is_exclusive = last_lsn > 0;
-            let iter: Box<
-                dyn Iterator<
-                    Item = Result<
-                        (FramedWalRecord<WalRecord>, WalPosition),
-                        gossipgrid_wal::WalError,
-                    >,
-                >,
-            > = wal_lock
+            let iter = wal_lock
                 .stream_from(
                     last_lsn,
                     last_position,

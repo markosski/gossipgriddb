@@ -7,7 +7,7 @@ use gossipgrid::{
     env::{self, Env},
     node::{self, NodeState},
 };
-use gossipgrid_wal::WalLocalFile;
+use gossipgrid_wal::wal::WalLocalFile;
 use log::info;
 use std::env::set_var;
 use std::net::TcpListener;
@@ -65,9 +65,13 @@ pub async fn start_test_cluster_with_env(
     let env1: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_1")), true)
-                .await
-                .unwrap(),
+            WalLocalFile::new(
+                gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_1")),
+                true,
+                1024 * 1024,
+            )
+            .await
+            .unwrap(),
         ),
         bus1,
     ));
@@ -75,9 +79,13 @@ pub async fn start_test_cluster_with_env(
     let env2: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_2")), true)
-                .await
-                .unwrap(),
+            WalLocalFile::new(
+                gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_2")),
+                true,
+                1024 * 1024,
+            )
+            .await
+            .unwrap(),
         ),
         bus2,
     ));
@@ -85,9 +93,13 @@ pub async fn start_test_cluster_with_env(
     let env3: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
         Box::new(
-            WalLocalFile::new(gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_3")), true)
-                .await
-                .unwrap(),
+            WalLocalFile::new(
+                gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_3")),
+                true,
+                1024 * 1024,
+            )
+            .await
+            .unwrap(),
         ),
         bus3,
     ));
