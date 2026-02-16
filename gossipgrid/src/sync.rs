@@ -8,10 +8,11 @@ use crate::cluster::PartitionId;
 use crate::env::Env;
 use crate::item::{Item, ItemEntry, ItemStatus};
 use crate::node::{self, NodeAddress, NodeId, NodeState};
+use crate::storage::WalRecord;
 use crate::store::{DataStoreError, StorageKey};
 use bincode::{Decode, Encode};
 use dashmap::DashMap;
-use gossipgrid_wal::{FramedWalRecord, WalPosition, WalRecord};
+use gossipgrid_wal::{FramedWalRecord, WalPosition};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -651,18 +652,12 @@ pub struct FramedWalRecordItem {
     pub key_bytes: Vec<u8>,
 }
 
-impl From<FramedWalRecord> for FramedWalRecordItem {
-    fn from(record: FramedWalRecord) -> FramedWalRecordItem {
+impl From<FramedWalRecord<WalRecord>> for FramedWalRecordItem {
+    fn from(record: FramedWalRecord<WalRecord>) -> FramedWalRecordItem {
         match record {
             FramedWalRecord {
                 lsn,
-                record:
-                    WalRecord::Put {
-                        partition,
-                        key,
-                        value,
-                        hlc,
-                    },
+                record: WalRecord::Put { key, value, hlc },
             } => FramedWalRecordItem {
                 item: Item {
                     message: value,
@@ -673,17 +668,12 @@ impl From<FramedWalRecord> for FramedWalRecordItem {
                     },
                 },
                 lsn,
-                partition: partition.into(),
+                partition: PartitionId(0), // set by caller
                 key_bytes: key,
             },
             FramedWalRecord {
                 lsn,
-                record:
-                    WalRecord::Delete {
-                        partition,
-                        key,
-                        hlc,
-                    },
+                record: WalRecord::Delete { key, hlc },
             } => FramedWalRecordItem {
                 item: Item {
                     message: vec![],
@@ -694,7 +684,7 @@ impl From<FramedWalRecord> for FramedWalRecordItem {
                     },
                 },
                 lsn,
-                partition: partition.into(),
+                partition: PartitionId(0), // set by caller
                 key_bytes: key,
             },
         }
@@ -721,7 +711,7 @@ pub async fn server_handle_request(
     }
 
     let mut wal_scan_lsn_tracker: HashMap<PartitionId, (u64, WalPosition)> = HashMap::new();
-    let mut items = Vec::new();
+    let mut items: Vec<SyncResponseWalRecord> = Vec::new();
     let mut current_payload_size = 0;
     let wal_lock = env.get_wal();
     let time_now = now_millis();
@@ -753,7 +743,14 @@ pub async fn server_handle_request(
             };
 
             let is_exclusive = last_lsn > 0;
-            let iter = wal_lock
+            let iter: Box<
+                dyn Iterator<
+                        Item = Result<
+                            (FramedWalRecord<WalRecord>, WalPosition),
+                            gossipgrid_wal::WalError,
+                        >,
+                    > + '_,
+            > = wal_lock
                 .stream_from(
                     last_lsn,
                     last_position,
@@ -770,7 +767,8 @@ pub async fn server_handle_request(
                 match record {
                     Ok((framed_record, position)) => {
                         data_found_in_this_iteration = true;
-                        let framed_item: FramedWalRecordItem = framed_record.into();
+                        let mut framed_item: FramedWalRecordItem = framed_record.into();
+                        framed_item.partition = req_partition.partition;
 
                         wal_scan_lsn_tracker
                             .entry(req_partition.partition)

@@ -43,6 +43,7 @@ pub mod fs;
 pub(crate) mod gossip;
 #[doc(hidden)]
 pub mod item;
+pub mod storage;
 pub(crate) mod sync;
 #[doc(hidden)]
 pub mod web;

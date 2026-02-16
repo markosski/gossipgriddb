@@ -1,5 +1,5 @@
 use bincode::{Decode, Encode};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::{
     collections::HashMap,
     io::{Read, Seek, SeekFrom},
@@ -181,29 +181,25 @@ impl WalPosition {
     }
 }
 
-#[derive(Serialize, Deserialize, Encode, Decode, Clone, Debug, PartialEq)]
-pub enum WalRecord {
-    Put {
-        partition: WalPartitionId,
-        key: Vec<u8>,
-        value: Vec<u8>,
-        hlc: u64,
-    },
-    Delete {
-        partition: WalPartitionId,
-        key: Vec<u8>,
-        hlc: u64,
-    },
-}
+// WalRecord removed and moved to gossipgrid crate.
 
 #[derive(Serialize, Deserialize, Encode, Decode, Debug)]
-pub struct FramedWalRecord {
+pub struct FramedWalRecord<T> {
     pub lsn: Lsn,
-    pub record: WalRecord,
+    pub record: T,
 }
 
 #[async_trait::async_trait]
-pub trait WalReader: Send + Sync {
+pub trait WalCommon: Send + Sync {
+    async fn io_sync(&self) -> Result<(), WalError>;
+    async fn get_lsn_watcher(
+        &self,
+        partition_id: WalPartitionId,
+    ) -> tokio::sync::watch::Receiver<u64>;
+}
+
+#[async_trait::async_trait]
+pub trait WalReader<T>: WalCommon + Send + Sync {
     /// Read records starting from a specific segment position.
     /// This is the precise, segment-aware reader used by the sync protocol.
     async fn stream_from(
@@ -212,7 +208,7 @@ pub trait WalReader: Send + Sync {
         from_position: WalPosition,
         partition: WalPartitionId,
         is_exclusive: bool,
-    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_>;
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord<T>, WalPosition), WalError>> + '_>;
 
     /// Read records starting from a given LSN.
     /// Convenience method that locates the correct segment automatically
@@ -223,23 +219,21 @@ pub trait WalReader: Send + Sync {
         from_lsn: Lsn,
         partition: WalPartitionId,
         is_exclusive: bool,
-    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_>;
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord<T>, WalPosition), WalError>> + '_>;
+}
 
-    async fn get_lsn_watcher(
+#[async_trait::async_trait]
+pub trait WalWriter<T>: WalCommon + Send + Sync {
+    async fn append(
         &self,
-        partition_id: WalPartitionId,
-    ) -> tokio::sync::watch::Receiver<u64>;
+        partition: WalPartitionId,
+        data: T,
+    ) -> Result<(Lsn, WalPosition), WalError>;
 }
 
 #[async_trait::async_trait]
-pub trait WalWriter: Send + Sync {
-    async fn append(&self, rec: WalRecord) -> Result<(Lsn, WalPosition), WalError>;
-    async fn io_sync(&self) -> Result<(), WalError>;
-}
-
-#[async_trait::async_trait]
-pub trait Wal: WalReader + WalWriter {}
-impl<T: WalReader + WalWriter> Wal for T {}
+pub trait Wal<T>: WalReader<T> + WalWriter<T> {}
+impl<T, W: WalReader<T> + WalWriter<T>> Wal<T> for W {}
 
 pub struct WalLocalFile {
     base_dir: PathBuf,
@@ -308,7 +302,7 @@ impl WalLocalFile {
 }
 
 #[async_trait::async_trait]
-impl WalWriter for WalLocalFile {
+impl WalCommon for WalLocalFile {
     async fn io_sync(&self) -> Result<(), WalError> {
         let handles = self.write_handles.read().await;
         for (_, fd) in handles.iter() {
@@ -318,12 +312,40 @@ impl WalWriter for WalLocalFile {
         Ok(())
     }
 
-    async fn append(&self, rec: WalRecord) -> Result<(Lsn, WalPosition), WalError> {
-        let partition = match rec {
-            WalRecord::Put { partition, .. } => partition,
-            WalRecord::Delete { partition, .. } => partition,
-        };
+    async fn get_lsn_watcher(
+        &self,
+        partition_id: WalPartitionId,
+    ) -> tokio::sync::watch::Receiver<u64> {
+        // Try getting a read lock first
+        {
+            let map = self.lsn_watchers.read().await;
+            if let Some(sender) = map.get(&partition_id) {
+                return sender.subscribe();
+            }
+        }
 
+        // Only take write lock if we need to insert
+        let mut map = self.lsn_watchers.write().await;
+        if let Some(sender) = map.get(&partition_id) {
+            sender.subscribe()
+        } else {
+            let (tx, rx) = tokio::sync::watch::channel(0);
+            map.insert(partition_id, tx);
+            rx
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<T> WalWriter<T> for WalLocalFile
+where
+    T: Encode + Decode<()> + Send + Sync + 'static,
+{
+    async fn append(
+        &self,
+        partition: WalPartitionId,
+        rec: T,
+    ) -> Result<(Lsn, WalPosition), WalError> {
         // Try to get the file lock with a read lock on the map
         let maybe_file = {
             let map = self.write_handles.read().await;
@@ -390,7 +412,7 @@ impl WalWriter for WalLocalFile {
             .ok_or_else(|| WalError::GeneralError("LSN overflow".to_string()))?;
         let framed = FramedWalRecord {
             lsn: new_lsn,
-            record: rec.clone(),
+            record: rec,
         };
         let payload = bincode::encode_to_vec(&framed, bincode::config::standard())
             .map_err(|e| WalError::GeneralError(format!("Failed to encode WAL record: {e}")))?;
@@ -574,7 +596,10 @@ impl WalLocalFile {
 }
 
 #[async_trait::async_trait]
-impl WalReader for WalLocalFile {
+impl<T> WalReader<T> for WalLocalFile
+where
+    T: Encode + Decode<()> + Send + Sync + 'static,
+{
     /// Scan WAL records starting from a specific segment position.
     ///
     /// # Arguments
@@ -593,7 +618,7 @@ impl WalReader for WalLocalFile {
         from_position: WalPosition,
         partition: WalPartitionId,
         is_exclusive: bool,
-    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_> {
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord<T>, WalPosition), WalError>> + '_> {
         let base_dir_str = match self.base_dir.to_str() {
             Some(s) => s,
             None => {
@@ -741,7 +766,14 @@ impl WalReader for WalLocalFile {
                 // Verify LSN continuity on the first record when resuming from a position.
                 if is_first_record && !first_record_checked {
                     first_record_checked = true;
-                    if lsn != from_lsn + 1 {
+                    // If we are exclusive and we read the record we thought we finished, just skip it.
+                    // This can happen if offsets were reported slightly differently between nodes.
+                    if is_exclusive && lsn == from_lsn {
+                        debug!(
+                            "Redundant LSN {lsn} found at offset {current_local_offset} during exclusive stream for partition {partition}"
+                        );
+                        // Continue loop to read next record
+                    } else if lsn != from_lsn + 1 {
                         return Some(Err(WalError::LsnOffsetMismatch(format!(
                             "LSN mismatch in WAL file partition: {partition}, from lsn: {from_lsn}, segment: {}, offset: {}, current lsn: {lsn}",
                             from_position.segment_index, from_position.local_offset,
@@ -749,7 +781,7 @@ impl WalReader for WalLocalFile {
                     }
                 }
 
-                let (framed, _) = match bincode::decode_from_slice::<FramedWalRecord, _>(
+                let (framed, _) = match bincode::decode_from_slice::<FramedWalRecord<T>, _>(
                     &payload,
                     bincode::config::standard(),
                 ) {
@@ -778,14 +810,12 @@ impl WalReader for WalLocalFile {
         Box::new(iter)
     }
 
-    /// Convenience method: read records starting from a given LSN.
-    /// Scans segment LSN footers to find the correct starting segment.
     async fn stream_from_lsn(
         &self,
         from_lsn: u64,
         partition: WalPartitionId,
         is_exclusive: bool,
-    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord, WalPosition), WalError>> + '_> {
+    ) -> Box<dyn Iterator<Item = Result<(FramedWalRecord<T>, WalPosition), WalError>> + '_> {
         let position = if from_lsn == 0 {
             WalPosition::zero()
         } else {
@@ -797,29 +827,6 @@ impl WalReader for WalLocalFile {
 
         self.stream_from(from_lsn, position, partition, is_exclusive)
             .await
-    }
-
-    async fn get_lsn_watcher(
-        &self,
-        partition_id: WalPartitionId,
-    ) -> tokio::sync::watch::Receiver<u64> {
-        // Try getting a read lock first
-        {
-            let map = self.lsn_watchers.read().await;
-            if let Some(sender) = map.get(&partition_id) {
-                return sender.subscribe();
-            }
-        }
-
-        // Only take write lock if we need to insert
-        let mut map = self.lsn_watchers.write().await;
-        if let Some(sender) = map.get(&partition_id) {
-            sender.subscribe()
-        } else {
-            let (tx, rx) = tokio::sync::watch::channel(0);
-            map.insert(partition_id, tx);
-            rx
-        }
     }
 }
 
@@ -835,38 +842,52 @@ pub enum WalError {
 mod tests {
     use super::*;
 
+    #[derive(Serialize, Deserialize, Encode, Decode, Clone, Debug, PartialEq)]
+    pub enum TestRecord {
+        Put {
+            key: Vec<u8>,
+            value: Vec<u8>,
+            hlc: u64,
+        },
+    }
+
     #[tokio::test]
     async fn test_wal() {
         let wal = WalLocalFile::new(PathBuf::from("/tmp/test"), true)
             .await
             .unwrap();
 
-        let record1 = WalRecord::Put {
-            partition: WalPartitionId(0),
+        let record1 = TestRecord::Put {
             key: b"key".to_vec(),
             value: b"value".to_vec(),
             hlc: 0,
         };
 
-        let record2 = WalRecord::Put {
-            partition: WalPartitionId(0),
+        let record2 = TestRecord::Put {
             key: b"key2".to_vec(),
             value: b"value2".to_vec(),
             hlc: 0,
         };
 
-        let (lsn, pos) = wal.append(record1.clone()).await.unwrap();
+        let (lsn, pos) = wal
+            .append(WalPartitionId(0), record1.clone())
+            .await
+            .unwrap();
         assert_eq!(lsn, 1);
-        assert_eq!(pos.local_offset, 26);
+        // Size changed because partition id is no longer in the record
+        assert_eq!(pos.local_offset, 25);
         assert_eq!(pos.segment_index, 1);
 
-        let (lsn, pos) = wal.append(record2.clone()).await.unwrap();
+        let (lsn, pos) = wal
+            .append(WalPartitionId(0), record2.clone())
+            .await
+            .unwrap();
         assert_eq!(lsn, 2);
-        assert_eq!(pos.local_offset, 54);
+        assert_eq!(pos.local_offset, 52);
         assert_eq!(pos.segment_index, 1);
 
         // Read from the beginning (non-exclusive)
-        let (record, pos) = wal
+        let (record, pos): (FramedWalRecord<TestRecord>, WalPosition) = wal
             .stream_from(1, WalPosition::zero(), WalPartitionId(0), false)
             .await
             .next()
@@ -874,10 +895,10 @@ mod tests {
             .unwrap();
         assert_eq!(record.lsn, 1);
         assert_eq!(record.record, record1);
-        assert_eq!(pos.local_offset, 26);
+        assert_eq!(pos.local_offset, 25);
 
         // Read from the beginning (exclusive — skip LSN 1)
-        let (record, pos) = wal
+        let (record, pos): (FramedWalRecord<TestRecord>, WalPosition) = wal
             .stream_from(1, WalPosition::zero(), WalPartitionId(0), true)
             .await
             .next()
@@ -885,28 +906,28 @@ mod tests {
             .unwrap();
         assert_eq!(record.lsn, 2);
         assert_eq!(record.record, record2);
-        assert_eq!(pos.local_offset, 54);
+        assert_eq!(pos.local_offset, 52);
 
-        // Resume from a specific position (segment 1, offset 26)
-        let (record, pos) = wal
-            .stream_from(1, WalPosition::new(1, 26), WalPartitionId(0), true)
+        // Resume from a specific position (segment 1, offset 25)
+        let (record, pos): (FramedWalRecord<TestRecord>, WalPosition) = wal
+            .stream_from(1, WalPosition::new(1, 25), WalPartitionId(0), true)
             .await
             .next()
             .unwrap()
             .unwrap();
         assert_eq!(record.lsn, 2);
         assert_eq!(record.record, record2);
-        assert_eq!(pos.local_offset, 54);
+        assert_eq!(pos.local_offset, 52);
 
         // Unhappy Path: wrong offset — read lands in garbage, should return None
-        let record = wal
-            .stream_from(1, WalPosition::new(1, 25), WalPartitionId(0), true)
+        let record: Option<Result<(FramedWalRecord<TestRecord>, WalPosition), WalError>> = wal
+            .stream_from(1, WalPosition::new(1, 24), WalPartitionId(0), true)
             .await
             .next();
         assert!(record.is_none());
 
         // Exclusive past last record — nothing to read
-        let record = wal
+        let record: Option<Result<(FramedWalRecord<TestRecord>, WalPosition), WalError>> = wal
             .stream_from(2, WalPosition::zero(), WalPartitionId(0), true)
             .await
             .next();
@@ -919,41 +940,44 @@ mod tests {
             .await
             .unwrap();
 
-        let record1 = WalRecord::Put {
-            partition: WalPartitionId(0),
+        let record1 = TestRecord::Put {
             key: b"key1".to_vec(),
             value: b"val1".to_vec(),
             hlc: 0,
         };
-        let record2 = WalRecord::Put {
-            partition: WalPartitionId(0),
+        let record2 = TestRecord::Put {
             key: b"key2".to_vec(),
             value: b"val2".to_vec(),
             hlc: 0,
         };
-        let record3 = WalRecord::Put {
-            partition: WalPartitionId(0),
+        let record3 = TestRecord::Put {
             key: b"key3".to_vec(),
             value: b"val3".to_vec(),
             hlc: 0,
         };
 
-        wal.append(record1.clone()).await.unwrap();
-        wal.append(record2.clone()).await.unwrap();
-        wal.append(record3.clone()).await.unwrap();
+        wal.append(WalPartitionId(0), record1.clone())
+            .await
+            .unwrap();
+        wal.append(WalPartitionId(0), record2.clone())
+            .await
+            .unwrap();
+        wal.append(WalPartitionId(0), record3.clone())
+            .await
+            .unwrap();
 
         // stream_from_lsn with lsn=0 should read all
-        let all: Vec<_> = wal
+        let all: Vec<Result<(FramedWalRecord<TestRecord>, WalPosition), WalError>> = wal
             .stream_from_lsn(0, WalPartitionId(0), false)
             .await
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(all.len(), 3);
 
         // stream_from_lsn with lsn=2, exclusive should give only record 3
-        let from2: Vec<_> = wal
+        let from2: Vec<Result<(FramedWalRecord<TestRecord>, WalPosition), WalError>> = wal
             .stream_from_lsn(2, WalPartitionId(0), true)
             .await
-            .collect::<Vec<_>>();
+            .collect();
         assert_eq!(from2.len(), 1);
         let (rec, _) = from2[0].as_ref().unwrap();
         assert_eq!(rec.lsn, 3);
@@ -989,14 +1013,13 @@ mod tests {
         let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
         let partition = WalPartitionId(0);
 
-        let record = WalRecord::Put {
-            partition,
+        let record = TestRecord::Put {
             key: vec![0; 10],
             value: vec![0; 10],
             hlc: 0,
         };
 
-        wal.append(record.clone()).await.unwrap(); // Segment 1
+        wal.append(partition, record.clone()).await.unwrap(); // Segment 1
         assert!(test_dir.join("part_0_0000000001.wal").exists());
 
         // Since we only have one segment, and it's active, it should NOT be deleted.
@@ -1014,7 +1037,7 @@ mod tests {
                 .unwrap();
         }
         // Now Segment 2 is active. Append a record to it.
-        wal.append(record.clone()).await.unwrap(); // LSN 2
+        wal.append(partition, record.clone()).await.unwrap(); // LSN 2
 
         assert!(test_dir.join("part_0_0000000001.wal").exists());
         assert!(test_dir.join("part_0_0000000002.wal").exists());
@@ -1031,8 +1054,7 @@ mod tests {
         let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
         let partition = WalPartitionId(0);
 
-        let record = WalRecord::Put {
-            partition,
+        let record = TestRecord::Put {
             key: vec![0; 100],
             value: vec![0; 100],
             hlc: 0,
@@ -1040,7 +1062,7 @@ mod tests {
 
         // Write ~6 records to exceed 1KB (each record is > 200 bytes)
         for _ in 0..6 {
-            wal.append(record.clone()).await.unwrap();
+            wal.append(partition, record.clone()).await.unwrap();
         }
 
         assert!(test_dir.join("part_0_0000000001.wal").exists());
@@ -1053,8 +1075,7 @@ mod tests {
         let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
         let partition = WalPartitionId(0);
 
-        let record = WalRecord::Put {
-            partition,
+        let record = TestRecord::Put {
             key: vec![0; 100],
             value: vec![0; 100],
             hlc: 0,
@@ -1063,23 +1084,22 @@ mod tests {
         // Write 10 records to span multiple segments
         for i in 0..10 {
             let mut rec = record.clone();
-            if let WalRecord::Put { hlc, .. } = &mut rec {
-                *hlc = i as u64;
-            }
-            wal.append(rec).await.unwrap();
+            let TestRecord::Put { hlc, .. } = &mut rec;
+            *hlc = i as u64;
+            wal.append(partition, rec).await.unwrap();
         }
 
         // Stream all records from LSN 0
-        let all: Vec<_> = wal.stream_from_lsn(0, partition, false).await.collect();
+        let all: Vec<Result<(FramedWalRecord<TestRecord>, WalPosition), WalError>> =
+            wal.stream_from_lsn(0, partition, false).await.collect();
         assert_eq!(all.len(), 10);
 
         // Verify sequence
         for (i, res) in all.into_iter().enumerate() {
             let (framed, _) = res.unwrap();
             assert_eq!(framed.lsn, (i + 1) as u64);
-            if let WalRecord::Put { hlc, .. } = framed.record {
-                assert_eq!(hlc, i as u64);
-            }
+            let TestRecord::Put { hlc, .. } = framed.record;
+            assert_eq!(hlc, i as u64);
         }
     }
 
@@ -1087,8 +1107,7 @@ mod tests {
     async fn test_wal_recovery() {
         let test_dir = PathBuf::from("/tmp/test_wal_recovery");
         let partition = WalPartitionId(0);
-        let record = WalRecord::Put {
-            partition,
+        let record = TestRecord::Put {
             key: b"data".to_vec(),
             value: b"value".to_vec(),
             hlc: 123,
@@ -1096,8 +1115,8 @@ mod tests {
 
         {
             let wal = WalLocalFile::new(test_dir.clone(), true).await.unwrap();
-            wal.append(record.clone()).await.unwrap();
-            wal.append(record.clone()).await.unwrap();
+            wal.append(partition, record.clone()).await.unwrap();
+            wal.append(partition, record.clone()).await.unwrap();
             // Ensure data is synced
             wal.io_sync().await.unwrap();
         }
@@ -1105,13 +1124,14 @@ mod tests {
         // Simulate restart
         {
             let wal = WalLocalFile::new(test_dir.clone(), false).await.unwrap();
-            let (lsn, pos) = wal.append(record.clone()).await.unwrap();
+            let (lsn, pos) = wal.append(partition, record.clone()).await.unwrap();
 
             // Should have resumed after LSN 2
             assert_eq!(lsn, 3);
             assert_eq!(pos.segment_index, 1);
 
-            let all: Vec<_> = wal.stream_from_lsn(0, partition, false).await.collect();
+            let all: Vec<Result<(FramedWalRecord<TestRecord>, WalPosition), WalError>> =
+                wal.stream_from_lsn(0, partition, false).await.collect();
             assert_eq!(all.len(), 3);
         }
     }
