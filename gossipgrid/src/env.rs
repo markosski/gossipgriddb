@@ -3,7 +3,7 @@ use reqwest::Client;
 use crate::{
     event_bus::EventBus, function_registry::FunctionRegistry, store::Store, wal::WalRecord,
 };
-use gossipgrid_wal::Wal;
+use pwal::Wal;
 
 pub struct Env {
     pub store: Box<dyn Store + Send + Sync>,

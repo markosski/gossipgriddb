@@ -1,5 +1,5 @@
 use bincode::{Decode, Encode};
-use gossipgrid_wal::FramedWalRecord;
+use pwal::FramedWalRecord;
 use serde::{Deserialize, Serialize};
 
 use crate::{

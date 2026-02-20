@@ -38,7 +38,7 @@ use crate::env::Env;
 use crate::event_bus::EventBus;
 use crate::store::Store;
 use crate::store::memory_store::InMemoryStore;
-use gossipgrid_wal::wal::WalLocalFile;
+use pwal::wal::WalLocalFile;
 
 use super::address::NodeAddress;
 use super::state::NodeState;

@@ -47,14 +47,14 @@ impl From<u16> for PartitionId {
     }
 }
 
-impl From<PartitionId> for gossipgrid_wal::WalPartitionId {
+impl From<PartitionId> for pwal::WalPartitionId {
     fn from(p: PartitionId) -> Self {
-        gossipgrid_wal::WalPartitionId(p.0)
+        pwal::WalPartitionId(p.0)
     }
 }
 
-impl From<gossipgrid_wal::WalPartitionId> for PartitionId {
-    fn from(p: gossipgrid_wal::WalPartitionId) -> Self {
+impl From<pwal::WalPartitionId> for PartitionId {
+    fn from(p: pwal::WalPartitionId) -> Self {
         PartitionId(p.0)
     }
 }

@@ -7,8 +7,8 @@ use gossipgrid::{
     env::{self, Env},
     node::{self, NodeState},
 };
-use gossipgrid_wal::wal::WalLocalFile;
 use log::info;
+use pwal::wal::WalLocalFile;
 use std::env::set_var;
 use std::net::TcpListener;
 use std::sync::Arc;
