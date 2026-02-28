@@ -17,6 +17,9 @@
 - Use Rust 2024 edition defaults: 4-space indentation, snake_case for modules/functions, CamelCase for types.
 - Derive traits where practical; prefer explicit `use` paths over glob imports.
 - Keep modules small and cohesive; co-locate unit tests with each module when logic is tightly coupled.
+- Keep functions small and easily testable with unit tests.
+- Ensure code is performant but only where it matters, prefer code readability over premature optimization.
+- For parts of code that perform side-effects, e.g. writing to disk, making network calls, ensure proper abstactions with traits are used to help with testing through mocks or fakes.
 - Ensure written code is memory leak free, locks are hadled efficiently and overal focus is places on performance and correctness.
 
 ## Testing Guidelines
