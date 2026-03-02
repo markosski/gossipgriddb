@@ -53,5 +53,5 @@
 - [x] 8.1 Unit test: verify `hash_key` produces identical results to server's `Cluster::hash_key_inner` for a set of known keys.
 - [x] 8.2 Unit test: verify routing logic sends reads to replicas and writes to leaders given a mock topology.
 - [x] 8.3 Unit test: verify `LeaderUnavailable` is returned when leader node state is not `Joined`.
-- [ ] 8.4 Integration test: spin up a 3-node ephemeral cluster, use the client to put/get/delete items, verify correct behavior.
-- [ ] 8.5 Verify the `GET /cluster/topology` endpoint returns valid JSON with expected fields.
+- [x] 8.4 Integration test: spin up a 3-node ephemeral cluster, use the client to put/get/delete items, verify correct behavior.
+- [x] 8.5 Verify the `GET /cluster/topology` endpoint returns valid JSON with expected fields.

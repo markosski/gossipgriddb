@@ -63,10 +63,11 @@ All operations return `Result<serde_json::Value, ClientError>`. The error varian
 | `LeaderUnavailable` | The partition leader is down or not yet elected. Writes/deletes cannot proceed. |
 | `NoHealthyNodes` | All seed/known nodes are unreachable. |
 | `ConnectionFailed` | A specific node connection failed. Triggers an automatic topology refresh. |
-| `TopologyStale` | The topology has not been refreshed for multiple heartbeat cycles. |
 | `ServerError` | The server returned an HTTP error (includes status code and message). |
 
 ## Running Benchmarks
+
+### Criterion Benchmarks
 
 Benchmarks use [Criterion](https://docs.rs/criterion) and require a running GossipGridDB cluster on `localhost:3001`.
 
@@ -79,6 +80,19 @@ cargo bench -p gossipgrid-client -- put_item
 ```
 
 > **Note:** The benchmarks connect to a live cluster. Make sure at least one node is running before executing them.
+
+### Non-Criterion Benchmarks (Latency Tests)
+
+There are also custom latency benchmarks that don't use Criterion. These are run using the standard `cargo bench` or `cargo test` command targeting specific test files. They also require a running local cluster on `localhost:3001`.
+
+```bash
+# Run the client latency benchmark
+cargo test --bench latency_bench -- --nocapture
+
+# Run the direct API latency benchmark (for comparison)
+cargo test --bench api_latency_bench -- --nocapture
+```
+
 
 ## License
 

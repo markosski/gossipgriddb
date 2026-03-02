@@ -1,20 +1,12 @@
-use gossipgrid_client::GossipGridClient;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use reqwest::Client;
+use serde_json::json;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
-const SEED_NODE: &str = "127.0.0.1:3001";
+const API_NODE: &str = "http://127.0.0.1:3001";
 const NUM_REQUESTS: usize = 1000;
-
-fn build_client(rt: &Runtime) -> GossipGridClient {
-    rt.block_on(async {
-        GossipGridClient::builder()
-            .seed_nodes(vec![SEED_NODE.to_string()])
-            .heartbeat_interval(Duration::from_secs(30))
-            .build()
-            .await
-            .expect("Failed to connect to cluster. Is a node running on localhost:3001?")
-    })
-}
 
 fn percentile(sorted: &[Duration], p: f64) -> Duration {
     let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
@@ -23,6 +15,10 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
 
 fn print_report(label: &str, latencies: &mut [Duration]) {
     latencies.sort();
+    if latencies.is_empty() {
+        println!("\n── {label} (0 requests) ──");
+        return;
+    }
     let total: Duration = latencies.iter().sum();
     let mean = total / latencies.len() as u32;
 
@@ -39,19 +35,34 @@ fn print_report(label: &str, latencies: &mut [Duration]) {
 
 fn main() {
     let rt = Runtime::new().unwrap();
-    let client = build_client(&rt);
+    let client = Client::new();
 
     // ── PUT latency ──
     let mut put_latencies = Vec::with_capacity(NUM_REQUESTS);
     let mut put_errors = 0u64;
 
     for i in 0..NUM_REQUESTS {
-        let key = format!("latency_put:{i}");
+        let key = format!("api_latency_put:{i}");
         let range = format!("range:{i}");
         let value = format!("value_{i}");
 
+        let body = json!({
+            "partition_key": key,
+            "range_key": range,
+            "message": BASE64_STANDARD.encode(value.as_bytes()),
+        });
+
+        let url = format!("{API_NODE}/items");
+
         let start = Instant::now();
-        let result = rt.block_on(async { client.put(&key, &range, value.as_bytes()).await });
+        let result = rt.block_on(async {
+            client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await?
+                .error_for_status()
+        });
         let elapsed = start.elapsed();
 
         match result {
@@ -65,7 +76,7 @@ fn main() {
         }
     }
 
-    print_report("PUT", &mut put_latencies);
+    print_report("PUT (API)", &mut put_latencies);
     if put_errors > 0 {
         println!("  errors {put_errors}");
     }
@@ -75,11 +86,12 @@ fn main() {
     let mut get_errors = 0u64;
 
     for i in 0..NUM_REQUESTS {
-        let key = format!("latency_put:{i}");
+        let key = format!("api_latency_put:{i}");
         let range = format!("range:{i}");
+        let url = format!("{API_NODE}/items/{key}/{range}");
 
         let start = Instant::now();
-        let result = rt.block_on(async { client.get(&key, &range).await });
+        let result = rt.block_on(async { client.get(&url).send().await?.error_for_status() });
         let elapsed = start.elapsed();
 
         match result {
@@ -93,10 +105,8 @@ fn main() {
         }
     }
 
-    print_report("GET", &mut get_latencies);
+    print_report("GET (API)", &mut get_latencies);
     if get_errors > 0 {
         println!("  errors {get_errors}");
     }
-
-    rt.block_on(async { client.shutdown().await });
 }

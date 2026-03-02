@@ -1,6 +1,8 @@
 use crate::error::ClientError;
 use crate::topology::{NodeInfo, TopologySnapshot};
 use crate::types::PartitionId;
+use std::hash::{Hash, Hasher};
+use twox_hash::XxHash64;
 
 /// The type of operation being performed, used to determine routing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,9 +16,6 @@ pub enum Operation {
 ///
 /// Uses xxHash64 with seed 0 and `Hash` trait for `&str` to ensure byte-identical results.
 pub fn hash_key(partition_count: u16, key: &str) -> PartitionId {
-    use std::hash::{Hash, Hasher};
-    use twox_hash::XxHash64;
-
     let mut h = XxHash64::with_seed(0);
     key.hash(&mut h);
     PartitionId((h.finish() % partition_count as u64) as u16)
@@ -38,32 +37,32 @@ pub fn resolve_target<'a>(
     }
 }
 
-/// For reads: find a healthy replica for the partition, falling back to leader.
-fn resolve_read_target<'a>(
-    snapshot: &'a TopologySnapshot,
+/// For reads: prioritize the leader for read-after-write consistency,
+/// falling back to a healthy replica if the leader is unavailable.
+fn resolve_read_target(
+    snapshot: &TopologySnapshot,
     partition_id: PartitionId,
-) -> Result<(&'a NodeInfo, PartitionId), ClientError> {
+) -> Result<(&NodeInfo, PartitionId), ClientError> {
     let leader_node_index = snapshot.partition_leaders.get(&partition_id);
 
-    // Try to find a non-leader Joined replica that holds this partition
+    // 1. Try to route to the leader first
+    if let Some(&leader_idx) = leader_node_index
+        && let Some(node) = snapshot.nodes.get(&leader_idx)
+        && node.state == "Joined"
+    {
+        return Ok((node, partition_id));
+    }
+
+    // 2. Fall back to any non-leader Joined replica that holds this partition
     for (node_index, partitions) in &snapshot.partition_assignments {
         if partitions.contains(&partition_id) {
-            // Prefer non-leader replicas
+            // Already tried leader above
             if leader_node_index.is_some_and(|&leader| leader == *node_index) {
                 continue;
             }
-            if let Some(node) = snapshot.nodes.get(node_index) {
-                if node.state == "Joined" {
-                    return Ok((node, partition_id));
-                }
-            }
-        }
-    }
-
-    // Fall back to leader
-    if let Some(&leader_idx) = leader_node_index {
-        if let Some(node) = snapshot.nodes.get(&leader_idx) {
-            if node.state == "Joined" {
+            if let Some(node) = snapshot.nodes.get(node_index)
+                && node.state == "Joined"
+            {
                 return Ok((node, partition_id));
             }
         }
@@ -73,16 +72,15 @@ fn resolve_read_target<'a>(
 }
 
 /// For writes/deletes: route to leader only.
-fn resolve_write_target<'a>(
-    snapshot: &'a TopologySnapshot,
+fn resolve_write_target(
+    snapshot: &TopologySnapshot,
     partition_id: PartitionId,
-) -> Result<(&'a NodeInfo, PartitionId), ClientError> {
-    if let Some(&leader_idx) = snapshot.partition_leaders.get(&partition_id) {
-        if let Some(node) = snapshot.nodes.get(&leader_idx) {
-            if node.state == "Joined" {
-                return Ok((node, partition_id));
-            }
-        }
+) -> Result<(&NodeInfo, PartitionId), ClientError> {
+    if let Some(&leader_idx) = snapshot.partition_leaders.get(&partition_id)
+        && let Some(node) = snapshot.nodes.get(&leader_idx)
+        && node.state == "Joined"
+    {
+        return Ok((node, partition_id));
     }
 
     Err(ClientError::LeaderUnavailable { partition_id })
@@ -121,27 +119,18 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_read_prefers_replica() {
+    fn test_resolve_read_prefers_leader() {
         let snapshot = make_test_snapshot();
         let partition_id = hash_key(snapshot.partition_count, "test_key");
-        let leader_idx = snapshot.partition_leaders.get(&partition_id);
+        let leader_idx = snapshot.partition_leaders.get(&partition_id).unwrap();
+        let leader_node = snapshot.nodes.get(leader_idx).unwrap();
+
         let (node, _pid) = resolve_target(&snapshot, "test_key", Operation::Read).unwrap();
 
-        let has_non_leader_replica = snapshot.partition_assignments.iter().any(|(idx, parts)| {
-            parts.contains(&partition_id)
-                && leader_idx.is_some_and(|&l| l != *idx)
-                && snapshot.nodes.get(idx).is_some_and(|n| n.state == "Joined")
-        });
-
-        if has_non_leader_replica {
-            if let Some(&leader) = leader_idx {
-                let leader_node = snapshot.nodes.get(&leader).unwrap();
-                assert_ne!(
-                    node.address, leader_node.address,
-                    "Read should prefer replica over leader"
-                );
-            }
-        }
+        assert_eq!(
+            node.address, leader_node.address,
+            "Read should prefer leader over replica"
+        );
     }
 
     #[test]

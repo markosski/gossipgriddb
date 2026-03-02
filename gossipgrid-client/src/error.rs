@@ -21,10 +21,6 @@ pub enum ClientError {
         source: reqwest::Error,
     },
 
-    /// The topology has not been refreshed successfully for multiple heartbeat cycles.
-    #[error("Topology is stale")]
-    TopologyStale,
-
     /// The server returned an HTTP error.
     #[error("Server error (status {status}): {message}")]
     ServerError { status: u16, message: String },

@@ -21,6 +21,7 @@ log = { version = "0.4.*" }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
 tokio = { version = "1.48.0", features = ["rt-multi-thread"] }
+base64 = "0.22"
 
 [[bench]]
 name = "client_bench"
@@ -28,4 +29,8 @@ harness = false
 
 [[bench]]
 name = "latency_bench"
+harness = false
+
+[[bench]]
+name = "api_latency_bench"
 harness = false
