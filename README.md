@@ -24,7 +24,6 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 - [x] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
 - [ ] **Cluster Resizing**: Increase throughput without downtime
 - [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads.
-- [ ] **WAL Compaction**: Reclaim disk space automatically, improved data recovery performance.
 
 ## 🏗️ Architecture
 
