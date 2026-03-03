@@ -1,9 +1,12 @@
 use gossipgrid_client::GossipGridClient;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Runtime;
+mod common;
+use common::print_report;
 
 const SEED_NODE: &str = "127.0.0.1:3001";
-const NUM_REQUESTS: usize = 1000;
+const NUM_REQUESTS: usize = 1_000_000;
 
 fn build_client(rt: &Runtime) -> GossipGridClient {
     rt.block_on(async {
@@ -16,87 +19,63 @@ fn build_client(rt: &Runtime) -> GossipGridClient {
     })
 }
 
-fn percentile(sorted: &[Duration], p: f64) -> Duration {
-    let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
-    sorted[idx]
-}
-
-fn print_report(label: &str, latencies: &mut [Duration]) {
-    latencies.sort();
-    let total: Duration = latencies.iter().sum();
-    let mean = total / latencies.len() as u32;
-
-    println!("\n── {label} ({} requests) ──", latencies.len());
-    println!("  min    {:>10.3?}", latencies.first().unwrap());
-    println!("  p50    {:>10.3?}", percentile(latencies, 50.0));
-    println!("  p90    {:>10.3?}", percentile(latencies, 90.0));
-    println!("  p95    {:>10.3?}", percentile(latencies, 95.0));
-    println!("  p99    {:>10.3?}", percentile(latencies, 99.0));
-    println!("  max    {:>10.3?}", latencies.last().unwrap());
-    println!("  mean   {:>10.3?}", mean);
-    println!("  total  {:>10.3?}", total);
-}
-
 fn main() {
     let rt = Runtime::new().unwrap();
-    let client = build_client(&rt);
+    let client = Arc::new(build_client(&rt));
+
+    // Read concurrency from environment or default to 1 (sequential)
+    let concurrency: usize = std::env::var("CONCURRENCY")
+        .unwrap_or_else(|_| "1".to_string())
+        .parse()
+        .expect("CONCURRENCY must be a positive integer");
+
+    println!("Starting benchmarks with CONCURRENCY = {}", concurrency);
 
     // ── PUT latency ──
-    let mut put_latencies = Vec::with_capacity(NUM_REQUESTS);
-    let mut put_errors = 0u64;
-
-    for i in 0..NUM_REQUESTS {
-        let key = format!("latency_put:{i}");
-        let range = format!("range:{i}");
-        let value = format!("value_{i}");
-
-        let start = Instant::now();
-        let result = rt.block_on(async { client.put(&key, &range, value.as_bytes()).await });
-        let elapsed = start.elapsed();
-
-        match result {
-            Ok(_) => put_latencies.push(elapsed),
-            Err(e) => {
-                put_errors += 1;
-                if put_errors <= 3 {
-                    eprintln!("  PUT error #{put_errors}: {e}");
-                }
+    let client_put = client.clone();
+    let (mut put_latencies, put_total, put_errors) = rt.block_on(async {
+        common::run_concurrent_bench(NUM_REQUESTS, concurrency, move |i| {
+            let client = client_put.clone();
+            async move {
+                let key = format!("latency_put:{i}");
+                let range = format!("range:{i}");
+                let value = format!("value_{i}_{:0>1000}", "");
+                client.put(&key, &range, value.as_bytes()).await
             }
-        }
-    }
+        })
+        .await
+    });
 
-    print_report("PUT", &mut put_latencies);
+    print_report("PUT", &mut put_latencies, put_total);
     if put_errors > 0 {
         println!("  errors {put_errors}");
     }
 
     // ── GET latency (reads back the same keys) ──
-    let mut get_latencies = Vec::with_capacity(NUM_REQUESTS);
-    let mut get_errors = 0u64;
-
-    for i in 0..NUM_REQUESTS {
-        let key = format!("latency_put:{i}");
-        let range = format!("range:{i}");
-
-        let start = Instant::now();
-        let result = rt.block_on(async { client.get(&key, &range).await });
-        let elapsed = start.elapsed();
-
-        match result {
-            Ok(_) => get_latencies.push(elapsed),
-            Err(e) => {
-                get_errors += 1;
-                if get_errors <= 3 {
-                    eprintln!("  GET error #{get_errors}: {e}");
-                }
+    let client_get = client.clone();
+    let (mut get_latencies, get_total, get_errors) = rt.block_on(async {
+        common::run_concurrent_bench(NUM_REQUESTS, concurrency, move |i| {
+            let client = client_get.clone();
+            async move {
+                let key = format!("latency_put:{i}");
+                let range = format!("range:{i}");
+                client.get(&key, &range).await
             }
-        }
-    }
+        })
+        .await
+    });
 
-    print_report("GET", &mut get_latencies);
+    print_report("GET", &mut get_latencies, get_total);
     if get_errors > 0 {
         println!("  errors {get_errors}");
     }
 
-    rt.block_on(async { client.shutdown().await });
+    // We only have Arc references left, so we can't cleanly call shutdown on the client itself if it expects `&self` or `&mut self` without Arc.
+    // Assuming `shutdown` isn't strictly necessary for a benchmark exiting anyway, we can just drop it,
+    // or if `shutdown()` is available on `Arc<GossipGridClient>` or `&GossipGridClient`.
+    // Let's assume `client.shutdown().await` works on the reference.
+    if let Ok(c) = Arc::try_unwrap(client) {
+        let c: gossipgrid_client::GossipGridClient = c;
+        rt.block_on(async move { c.shutdown().await });
+    }
 }
