@@ -223,7 +223,7 @@ async fn try_route_request(
         memory.get_address().clone()
     };
 
-    info!(
+    debug!(
         "node={}; try route req_path: {:?}, method: {}, item_submit: {:?}",
         node_address, req_path, &method, &item_submit
     );
@@ -236,7 +236,7 @@ async fn try_route_request(
         Err(response) => return Ok(Some(serde_json::to_value(response).unwrap())),
     };
 
-    info!(
+    debug!(
         "node={}; routing result: {:?} for item {:?}",
         node_address, &routing, &item_submit
     );

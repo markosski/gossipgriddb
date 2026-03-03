@@ -517,7 +517,7 @@ async fn client_handle_sync_response(
                 if !response.records.is_empty() {
                     let _ = this_node.save_node_metadata(true);
                     if !added.is_empty() {
-                        info!(
+                        debug!(
                             "node={}; Synced {} items from {}",
                             this_node.get_address(),
                             added.len(),
@@ -613,7 +613,7 @@ async fn handle_connection(
                     .await;
                 }
                 TcpWireMessage::ResponseAck(ack) => {
-                    info!(
+                    debug!(
                         "node={}; replica {} responded with ack",
                         node_address, &addr
                     );
