@@ -5,6 +5,7 @@ use crate::web::items::{
     handle_get_item_count, handle_get_items, handle_get_items_without_range, handle_post_item,
     handle_remove_item, handle_remove_item_without_range,
 };
+use crate::web::topology::handle_get_topology;
 use log::info;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -81,6 +82,11 @@ pub async fn web_server_task(
         .and(with_env(env.clone()))
         .and_then(handle_list_functions);
 
+    let get_topology = warp::path!("cluster" / "topology")
+        .and(warp::get())
+        .and(with_memory(memory.clone()))
+        .and_then(handle_get_topology);
+
     let address = listen_on_address
         .as_str()
         .to_string()
@@ -94,7 +100,8 @@ pub async fn web_server_task(
             .or(get_items_count)
             .or(remove_item_with_range)
             .or(remove_item)
-            .or(list_functions),
+            .or(list_functions)
+            .or(get_topology),
     )
     .run(address);
 

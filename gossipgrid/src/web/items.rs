@@ -149,9 +149,9 @@ async fn decide_routing(
             // All write operations should go to leader
             leader_candidate
         } else {
-            // All read operations should go to replica, unless there is no replica available
-            // TODO: make this configurable, if we want read after write consistency we need to still direct to leader
-            replica_candidate.or(leader_candidate)
+            // All read operations should go to leader first for read-after-write consistency,
+            // falling back to a replica if the leader is unavailable.
+            leader_candidate.or(replica_candidate)
         };
 
         match route_target {
@@ -223,7 +223,7 @@ async fn try_route_request(
         memory.get_address().clone()
     };
 
-    info!(
+    debug!(
         "node={}; try route req_path: {:?}, method: {}, item_submit: {:?}",
         node_address, req_path, &method, &item_submit
     );
@@ -236,7 +236,7 @@ async fn try_route_request(
         Err(response) => return Ok(Some(serde_json::to_value(response).unwrap())),
     };
 
-    info!(
+    debug!(
         "node={}; routing result: {:?} for item {:?}",
         node_address, &routing, &item_submit
     );
@@ -597,6 +597,7 @@ pub async fn handle_get_items(
                         }
                     }
                     None => {
+                        warn!("Function not found in registry: {fn_name}");
                         let response = ItemGenericResponseEnvelope {
                             success: None,
                             error: Some(format!("Function not found: {fn_name}")),

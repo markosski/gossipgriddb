@@ -29,14 +29,16 @@ async fn test_compute_sum_with_registered_function() {
     // Short sleep to allow sync to propagate
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // Register a function manually (simulating config load)
-    let env1 = nodes[0].2.clone();
-    env1.get_function_registry()
-        .register(
-            "sum_values".to_string(),
-            "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum".to_string(),
-        )
-        .unwrap();
+    // Register a function manually on all nodes (simulating config load)
+    for node in &nodes {
+        let env = node.2.clone();
+        env.get_function_registry()
+            .register(
+                "sum_values".to_string(),
+                "local sum = 0; local item = next_item(); while item ~= nil do sum = sum + item.data.v; item = next_item(); end; return sum".to_string(),
+            )
+            .unwrap();
+    }
 
     // List functions to verify registration
     let res = client

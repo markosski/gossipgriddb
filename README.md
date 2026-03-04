@@ -3,7 +3,7 @@
 [![Rust](https://github.com/markosski/gossipgrid/actions/workflows/rust.yml/badge.svg)](https://github.com/markosski/gossipgrid/actions/workflows/rust.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-GossipGridDB is a distributed Key-Value (KV) database designed for high availability and partition-aware compute (WIP). It uses a gossip protocol for cluster membership and a leader/replica model for data consistency.
+GossipGridDB is a distributed Key-Value (KV) database designed for high availability and partition-aware compute. It uses a gossip protocol for cluster membership and a leader/replica model for data consistency.
 
 ---
 
@@ -21,10 +21,9 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 - [x] **Embeddable**: Easily integrate into your Rust applications.
 - [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided).
 - [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations.
+- [x] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
 - [ ] **Cluster Resizing**: Increase throughput without downtime
-- [ ] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
 - [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads.
-- [ ] **WAL Compaction**: Reclaim disk space automatically, improved data recovery performance.
 
 ## 🏗️ Architecture
 
