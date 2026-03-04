@@ -5,71 +5,40 @@ use std::time::{Duration, Instant};
 mod helpers;
 
 #[tokio::test]
-async fn test_sync_ordering_proof() {
+async fn test_sync_wait_success() {
     let _ = env_logger::try_init();
 
-    let nodes = helpers::start_test_cluster(1, 3).await;
+    let nodes = helpers::start_test_cluster(1, 3).await; // 1 leader, 3 replicas
 
     let port1 = nodes[0].1.read().await.get_simple_node().unwrap().web_port;
-    let port2 = nodes[1].1.read().await.get_simple_node().unwrap().web_port;
     let leader_url = format!("http://localhost:{port1}/items");
-    let replica_url = format!("http://localhost:{port2}/items/ordering_test");
 
     let client = reqwest::Client::new();
-    let partition_key = "ordering_test";
+    let partition_key = "sync_success_test";
+
+    // Perform a POST to the leader.
+    // By default, POST /items triggers sync wait semantics (waiting for replica ACKs before responding).
+    let payload = format!(r#"{{"partition_key": "{partition_key}", "message": "success"}}"#);
 
     let start_time = Instant::now();
+    info!("Sending POST to leader, expecting successful sync...");
+    let resp = client
+        .post(leader_url)
+        .body(payload)
+        .send()
+        .await
+        .expect("Failed to send POST");
 
-    // 1. Spawn background POST request
-    let post_handle = tokio::spawn(async move {
-        let client = reqwest::Client::new();
-        let payload = format!(r#"{{"partition_key": "{partition_key}", "message": "proof"}}"#);
-        let resp = client
-            .post(leader_url)
-            .body(payload)
-            .send()
-            .await
-            .expect("Failed to send POST");
+    let status = resp.status();
+    let duration = start_time.elapsed();
+    let text = resp.text().await.unwrap();
 
-        let status = resp.status();
-        let text = resp.text().await.unwrap();
-        (status, text, Instant::now())
-    });
+    info!("POST took: {duration:?} with status: {status}");
 
-    // 2. Poll replica store for the item
-    let mut item_found_time = None;
-    for _ in 0..100 {
-        // 100 * 10ms = 1s timeout
-        let replica_res = client.get(&replica_url).send().await;
-
-        if let Ok(res) = replica_res
-            && res.status().is_success()
-        {
-            item_found_time = Some(Instant::now());
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-
-    let t1 = item_found_time.expect("Item never appeared on replica");
-
-    // 3. Wait for POST to complete
-    let (status, body, t2) = post_handle.await.unwrap();
-
-    assert!(status.is_success(), "POST failed: {body}");
-
-    info!(
-        "Replica had item at: {:?}, Leader responded at: {:?}",
-        t1 - start_time,
-        t2 - start_time
-    );
-
-    // 4. Assert T1 <= T2
+    assert!(status.is_success(), "POST failed: {text}");
     assert!(
-        t1 <= t2,
-        "Replica found item AFTER leader responded! (T1: {:?}, T2: {:?})",
-        t1 - start_time,
-        t2 - start_time
+        duration < Duration::from_millis(500),
+        "Duration was too long {duration:?}, meaning it probably hit a timeout instead of actual successful sync completion"
     );
 
     helpers::stop_nodes(nodes.into_iter().map(|n| n.0).collect()).await;

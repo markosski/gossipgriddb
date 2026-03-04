@@ -597,6 +597,7 @@ pub async fn handle_get_items(
                         }
                     }
                     None => {
+                        warn!("Function not found in registry: {fn_name}");
                         let response = ItemGenericResponseEnvelope {
                             success: None,
                             error: Some(format!("Function not found: {fn_name}")),
