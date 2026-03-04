@@ -7,7 +7,7 @@ use crate::node::{self, NodeAddress, NodeState, PreJoinNode, SimpleNode};
 use bincode::{Decode, Encode};
 use crossbeam_channel::Sender;
 use laminar::{Packet, SocketEvent};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 
 use std::cmp::min;
 use std::collections::HashMap;
