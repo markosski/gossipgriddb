@@ -13,17 +13,17 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 *   **Not production-ready**: Use for experimental and learning purposes only.
 
 ## 🚀 Features
-- [x] **Gossip Protocol**: Decentralized cluster membership management.
-- [x] **Leader/Replica Model**: High availability via data replication.
-- [x] **Durability**: Write-Ahead Log (WAL) ensures data is not lost on crash.
-- [x] **Partitioning**: Efficient data distribution for horizontal scaling.
-- [x] **Rich Querying**: Support for partition and range keys.
-- [x] **Embeddable**: Easily integrate into your Rust applications.
-- [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided).
-- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations.
-- [x] **Partition-Aware Client**: Direct routing to the correct node for lower latency.
+- [x] **Gossip Protocol**: Decentralized cluster membership management
+- [x] **Leader/Replica Model**: High availability via data replication
+- [x] **Durability**: Write-Ahead Log (WAL) ensures data is not lost on crash
+- [x] **Partitioning**: Efficient data distribution for horizontal scaling
+- [x] **Rich Querying**: Support for partition and range keys
+- [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided)
+- [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations
+- [x] **Partition-Aware Client**: Direct routing to the correct node for lower latency
+- [x] **Batch Writes**: Enhanced throughput for write-heavy workloads
+- [ ] **Embeddable**: Easily integrate into your Rust application
 - [ ] **Cluster Resizing**: Increase throughput without downtime
-- [ ] **Batch Writes**: Enhanced throughput for write-heavy workloads.
 
 ## 🏗️ Architecture
 

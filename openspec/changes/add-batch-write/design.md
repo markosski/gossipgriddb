@@ -26,9 +26,9 @@ The existing `POST /items/{partition_id}` is heavily tied to a single partition 
 *Alternative considered:* Modifying `POST /items/{partition_id}` to accept an array. This forces all items in the batch to belong to the same partition, which is less flexible for the smart client and forces the client to group items by partition itself before sending.
 
 ### 2. Smart Client Routing
-**Decision:** The `gossipgrid-client`'s `put_batch(items: Vec<ItemCreateUpdate>)` method will group the input items by their respective *leader node* based on the `partition_key`. It will then send one HTTP `POST /items/batch` request per distinct leader node concurrently.
+**Decision:** The `gossipgrid-client`'s `put_batch(items: Vec<ItemCreateUpdate>)` method will send the entire batch to any healthy node's `POST /items/batch` endpoint in a single request. The server-side handler is responsible for grouping items by leader and proxying remote sub-batches.
 **Rationale:**
-This minimizes inter-node proxying. If the client sends all items to a single random node, that node must act as a proxy, fanning out the items to the correct leaders, increasing network hops and the proxy node's CPU/memory usage. By letting the Smart Client group by leader, we achieve the most direct route.
+This keeps the client simple and avoids duplicating the partition-to-leader routing logic that already exists on the server. The server's `handle_post_item_batch` already groups items by leader, processes local items natively, and proxies remote sub-batches concurrently — so the client gains no correctness benefit from replicating that work. A single request also simplifies error handling and response aggregation on the client side. Client-side leader grouping remains a viable future optimization if proxy overhead becomes measurable.
 
 ### 3. Core Database Logic (`items.rs`)
 **Decision:** Update `handle_post_item_batch` to process a `Vec<ItemCreateUpdate>`.
