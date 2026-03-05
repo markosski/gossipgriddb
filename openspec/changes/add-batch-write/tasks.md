@@ -16,6 +16,6 @@
 
 ## 3. Testing & Benchmarking
 
-- [ ] 3.1 Write an integration test in `gossipgrid/tests/int_tests_sync_wait.rs` or a new file to verify batch single-node writes.
-- [ ] 3.2 Write an integration test using the `gossipgrid-client` to verify `put_batch` routes correctly in a multi-node cluster.
-- [ ] 3.3 Create a new benchmark `gossipgrid-client/benches/batch_latency_bench.rs` (or update an existing one) to measure batch write performance compared to single-item writes.
+- [x] 3.1 Write an integration test in `gossipgrid/tests/int_tests_sync_wait.rs` or a new file to verify batch single-node writes.
+- [x] 3.2 Write an integration test using the `gossipgrid-client` to verify `put_batch` routes correctly in a multi-node cluster.
+- [x] 3.3 Create a new benchmark `gossipgrid-client/benches/batch_latency_bench.rs` (or update an existing one) to measure batch write performance compared to single-item writes.

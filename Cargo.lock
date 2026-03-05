@@ -861,6 +861,7 @@ dependencies = [
  "env_logger",
  "fastcache",
  "futures",
+ "gossipgrid-client",
  "laminar",
  "log",
  "mlua",

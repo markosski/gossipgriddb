@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "api_latency_bench"
 harness = false
+
+[[bench]]
+name = "batch_latency_bench"
+harness = false

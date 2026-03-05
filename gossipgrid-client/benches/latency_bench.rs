@@ -6,7 +6,7 @@ mod common;
 use common::print_report;
 
 const SEED_NODE: &str = "127.0.0.1:3001";
-const NUM_REQUESTS: usize = 1_000_000;
+const NUM_REQUESTS: usize = 10_000;
 
 fn build_client(rt: &Runtime) -> GossipGridClient {
     rt.block_on(async {
