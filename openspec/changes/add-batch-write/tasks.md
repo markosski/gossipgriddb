@@ -1,10 +1,10 @@
 ## 1. HTTP API (Server)
 
-- [ ] 1.1 Update `gossipgrid/src/web/items.rs` to define the new HTTP `POST /items/batch` route in warp.
-- [ ] 1.2 Implement the `handle_post_item_batch` function in `gossipgrid/src/web/items.rs`.
-- [ ] 1.3 Inside `handle_post_item_batch`, group the incoming `Vec<ItemCreateUpdate>` by target leader node based on the partition key.
-- [ ] 1.4 Write logic to process the local sub-batch via `JoinedNode::insert_items_io_only` and proxy the remote sub-batches to other nodes concurrently.
-- [ ] 1.5 Consolidate the results (successes and errors) from all sub-batches and return a unified `ItemBatchResponseEnvelope` or equivalent.
+- [x] 1.1 Update `gossipgrid/src/web/items.rs` to define the new HTTP `POST /items/batch` route in warp.
+- [x] 1.2 Implement the `handle_post_item_batch` function in `gossipgrid/src/web/items.rs`.
+- [x] 1.3 Inside `handle_post_item_batch`, group the incoming `Vec<ItemCreateUpdate>` by target leader node based on the partition key.
+- [x] 1.4 Write logic to process the local sub-batch via `JoinedNode::insert_items_io_only` and proxy the remote sub-batches to other nodes concurrently.
+- [x] 1.5 Consolidate the results (successes and errors) from all sub-batches and return a unified `ItemBatchResponseEnvelope` or equivalent.
 
 ## 2. Smart Client (Client)
 

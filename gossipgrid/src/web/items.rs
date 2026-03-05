@@ -80,6 +80,19 @@ pub struct ItemGenericResponseEnvelope {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BatchItemError {
+    pub partition_key: String,
+    pub range_key: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ItemBatchResponseEnvelope {
+    pub inserted: usize,
+    pub errors: Option<Vec<BatchItemError>>,
+}
+
 #[derive(Debug, Clone)]
 struct RouteTarget {
     remote_addr: NodeAddress,
@@ -481,6 +494,234 @@ pub async fn handle_post_item(
             ))
         }
     }
+}
+
+pub async fn handle_post_item_batch(
+    items: Vec<ItemCreateUpdate>,
+    memory: Arc<RwLock<NodeState>>,
+    env: Arc<Env>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    // Read node state once to get partition_count, this_node address, and group items by leader
+    let (partition_count, this_node_addr, this_node_web_port, grouped) = {
+        let memory_read = memory.read().await;
+        let node = match memory_read.as_joined_node() {
+            Some(n) if n.is_ready() => n,
+            Some(_) | None => {
+                return Err(warp::reject::custom(WebError::NodeNotReady(
+                    CANNOT_PERFORM_ACTION_IN_CURRENT_STATE.to_string(),
+                )));
+            }
+        };
+
+        let this_addr = node.get_address().clone();
+        let this_web_port = node.web_port;
+        let pc = node.cluster.partition_count;
+
+        // Group items by their leader node
+        // Key: (NodeAddress, web_port) — value: items for that leader
+        let mut groups: HashMap<(NodeAddress, u16), Vec<ItemCreateUpdate>> = HashMap::new();
+        let mut unroutable: Vec<BatchItemError> = Vec::new();
+
+        for item in &items {
+            let leader = node.cluster.find_leader_for_partition(&item.partition_key);
+            match leader {
+                Some(dest) => {
+                    groups
+                        .entry((dest.address.clone(), dest.web_port))
+                        .or_default()
+                        .push(item.clone());
+                }
+                None => {
+                    unroutable.push(BatchItemError {
+                        partition_key: item.partition_key.clone(),
+                        range_key: item.range_key.clone(),
+                        reason: "No leader available for partition".to_string(),
+                    });
+                }
+            }
+        }
+
+        (pc, this_addr, this_web_port, (groups, unroutable))
+    };
+
+    let (groups, mut all_errors) = grouped;
+
+    let mut inserted_count: usize = 0;
+
+    // Separate local vs remote groups
+    let mut local_items: Vec<ItemCreateUpdate> = Vec::new();
+    let mut remote_futures = Vec::new();
+
+    for ((addr, web_port), group_items) in groups {
+        if addr == this_node_addr && web_port == this_node_web_port {
+            local_items = group_items;
+        } else {
+            // Spawn concurrent proxy request for this remote leader
+            let client = env.get_http_client().clone();
+            let target = RouteTarget {
+                remote_addr: addr,
+                web_port,
+            };
+            // TODO: at some point fix hardcoded http scheme
+            remote_futures.push(async move {
+                let endpoint = format!(
+                    "http://{}:{}/items/batch",
+                    target.remote_addr.ip, target.web_port
+                );
+                info!(
+                    "Proxying batch request ({} items) to {endpoint}",
+                    group_items.len()
+                );
+
+                let resp = client
+                    .post(&endpoint)
+                    .timeout(Duration::from_secs(10))
+                    .json(&group_items)
+                    .send()
+                    .await;
+
+                match resp {
+                    Ok(r) => {
+                        let bytes = r.bytes().await;
+                        match bytes {
+                            Ok(b) => {
+                                match serde_json::from_slice::<ItemBatchResponseEnvelope>(&b) {
+                                    Ok(envelope) => envelope,
+                                    Err(e) => ItemBatchResponseEnvelope {
+                                        inserted: 0,
+                                        errors: Some(
+                                            group_items
+                                                .iter()
+                                                .map(|i| BatchItemError {
+                                                    partition_key: i.partition_key.clone(),
+                                                    range_key: i.range_key.clone(),
+                                                    reason: format!(
+                                                        "Failed to parse remote response: {e}"
+                                                    ),
+                                                })
+                                                .collect(),
+                                        ),
+                                    },
+                                }
+                            }
+                            Err(e) => ItemBatchResponseEnvelope {
+                                inserted: 0,
+                                errors: Some(
+                                    group_items
+                                        .iter()
+                                        .map(|i| BatchItemError {
+                                            partition_key: i.partition_key.clone(),
+                                            range_key: i.range_key.clone(),
+                                            reason: format!("Failed to read remote response: {e}"),
+                                        })
+                                        .collect(),
+                                ),
+                            },
+                        }
+                    }
+                    Err(e) => ItemBatchResponseEnvelope {
+                        inserted: 0,
+                        errors: Some(
+                            group_items
+                                .iter()
+                                .map(|i| BatchItemError {
+                                    partition_key: i.partition_key.clone(),
+                                    range_key: i.range_key.clone(),
+                                    reason: format!("Failed to proxy batch request: {e}"),
+                                })
+                                .collect(),
+                        ),
+                    },
+                }
+            });
+        }
+    }
+
+    // Process local items
+    if !local_items.is_empty() {
+        // Prepare all local items
+        let item_entries: Vec<_> = {
+            let memory_read = memory.read().await;
+            match memory_read.as_joined_node() {
+                Some(node) => local_items
+                    .iter()
+                    .map(|item| {
+                        let storage_key = StorageKey::new(
+                            PartitionKey(item.partition_key.clone()),
+                            item.range_key.clone().map(RangeKey),
+                        );
+                        let message_bytes = item.message.as_bytes().to_vec();
+                        node.prepare_local_item(&storage_key, message_bytes, ItemStatus::Active)
+                    })
+                    .collect(),
+                None => {
+                    vec![]
+                }
+            }
+        };
+
+        if !item_entries.is_empty() {
+            let io_result = JoinedNode::insert_items_io_only(
+                partition_count,
+                item_entries.clone(),
+                env.get_store(),
+                env.get_wal(),
+            )
+            .await;
+
+            match io_result {
+                Ok((_added_keys, reqs, max_hlc)) => {
+                    let sync_ok = wait_for_sync(memory.clone(), reqs).await;
+                    if !sync_ok {
+                        all_errors.extend(local_items.iter().map(|i| BatchItemError {
+                            partition_key: i.partition_key.clone(),
+                            range_key: i.range_key.clone(),
+                            reason: "Sync failed for batch item".to_string(),
+                        }));
+                    }
+
+                    {
+                        let memory_read = memory.read().await;
+                        if let Some(node) = memory_read.as_joined_node() {
+                            node.node_hlc_item_merge(max_hlc);
+                        }
+                    }
+
+                    inserted_count += item_entries.len();
+                }
+                Err(e) => {
+                    all_errors.extend(local_items.iter().map(|i| BatchItemError {
+                        partition_key: i.partition_key.clone(),
+                        range_key: i.range_key.clone(),
+                        reason: format!("Batch insert error: {e}"),
+                    }));
+                }
+            }
+        }
+    }
+
+    // Wait for all remote proxied results
+    let remote_results = join_all(remote_futures).await;
+    for envelope in remote_results {
+        inserted_count += envelope.inserted;
+        if let Some(errors) = envelope.errors {
+            all_errors.extend(errors);
+        }
+    }
+
+    let response = ItemBatchResponseEnvelope {
+        inserted: inserted_count,
+        errors: if all_errors.is_empty() {
+            None
+        } else {
+            Some(all_errors)
+        },
+    };
+
+    Ok(warp::reply::with_status(
+        warp::reply::json(&response),
+        warp::http::StatusCode::OK,
+    ))
 }
 
 pub async fn handle_get_items_without_range(
