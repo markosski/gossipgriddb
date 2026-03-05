@@ -7,7 +7,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use gossipgrid_client::GossipGridClient;
+//! use gossipgrid_client::{GossipGridClient, ItemCreateUpdate};
 //! use std::time::Duration;
 //!
 //! #[tokio::main(flavor = "current_thread")]
@@ -19,10 +19,15 @@
 //!         .await?;
 //!
 //!     // Put an item
-//!     client.put("my_store", "my_range", b"hello world").await?;
+//!     let item = ItemCreateUpdate {
+//!         partition_key: "my_store".to_string(),
+//!         range_key: Some("my_range".to_string()),
+//!         message: base64_encode(b"hello world"),
+//!     };
+//!     client.put(item).await?;
 //!
 //!     // Get an item
-//!     let item = client.get("my_store", "my_range").await?;
+//!     let result = client.get("my_store", "my_range").await?;
 //!
 //!     // Delete an item
 //!     client.delete("my_store", "my_range").await?;
@@ -40,7 +45,9 @@ pub mod types;
 
 pub use error::ClientError;
 pub use topology::{NodeInfo, TopologySnapshot};
-pub use types::{NodeAddress, PartitionId};
+pub use types::{
+    BatchItemError, ItemBatchResponseEnvelope, ItemCreateUpdate, NodeAddress, PartitionId,
+};
 
 use log::{error, info};
 use routing::Operation;
@@ -153,26 +160,15 @@ impl GossipGridClient {
 
     /// Put (create/update) an item.
     ///
-    /// Routes to the partition leader for the given store key.
-    pub async fn put(
-        &self,
-        store_key: &str,
-        range_key: &str,
-        value: &[u8],
-    ) -> Result<serde_json::Value, ClientError> {
+    /// Routes to the partition leader for the given partition key.
+    pub async fn put(&self, item: ItemCreateUpdate) -> Result<serde_json::Value, ClientError> {
         let snapshot = self.topology.read().await;
         let (node, _partition_id) =
-            routing::resolve_target(&snapshot, store_key, Operation::Write)?;
+            routing::resolve_target(&snapshot, &item.partition_key, Operation::Write)?;
         let url = format!("{}/items", node.address.http_base_url(node.web_port));
         drop(snapshot);
 
-        let body = serde_json::json!({
-            "partition_key": store_key,
-            "range_key": range_key,
-            "message": base64_encode(value),
-        });
-
-        let response = self.http_client.post(&url).json(&body).send().await;
+        let response = self.http_client.post(&url).json(&item).send().await;
 
         match response {
             Ok(resp) => self.handle_response(resp).await,
@@ -285,6 +281,66 @@ impl GossipGridClient {
         }
     }
 
+    /// Put (create/update) multiple items in a single batch operation.
+    ///
+    /// Sends the entire batch to a single node's `POST /items/batch` endpoint,
+    /// which handles grouping items by partition leader and proxying to remote
+    /// leaders as needed. This keeps the client simple and avoids duplicating
+    /// routing logic that already exists on the server.
+    pub async fn put_batch(
+        &self,
+        items: Vec<ItemCreateUpdate>,
+    ) -> Result<ItemBatchResponseEnvelope, ClientError> {
+        if items.is_empty() {
+            return Ok(ItemBatchResponseEnvelope {
+                inserted: 0,
+                errors: None,
+            });
+        }
+
+        // Pick any healthy node to submit the batch to
+        let snapshot = self.topology.read().await;
+        let node = snapshot
+            .nodes
+            .values()
+            .find(|n| n.state == "Joined")
+            .ok_or(ClientError::NoHealthyNodes)?;
+        let url = format!("{}/items/batch", node.address.http_base_url(node.web_port));
+        drop(snapshot);
+
+        let response = self.http_client.post(&url).json(&items).send().await;
+
+        match response {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    resp.json::<ItemBatchResponseEnvelope>().await.map_err(|e| {
+                        ClientError::ServerError {
+                            status: 200,
+                            message: format!("Failed to parse batch response: {e}"),
+                        }
+                    })
+                } else {
+                    let status = resp.status();
+                    let body = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    Err(ClientError::ServerError {
+                        status: status.as_u16(),
+                        message: body,
+                    })
+                }
+            }
+            Err(e) => {
+                self.trigger_topology_refresh().await;
+                Err(ClientError::ConnectionFailed {
+                    address: url,
+                    source: e,
+                })
+            }
+        }
+    }
+
     /// Gracefully shut down the client, stopping the heartbeat task.
     pub async fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
@@ -363,7 +419,7 @@ async fn heartbeat_task(
 }
 
 /// Simple base64 encoding for binary values.
-fn base64_encode(data: &[u8]) -> String {
+pub fn base64_encode(data: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(data.len() * 4 / 3 + 4);
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

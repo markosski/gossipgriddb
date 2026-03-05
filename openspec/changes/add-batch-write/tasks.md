@@ -8,11 +8,11 @@
 
 ## 2. Smart Client (Client)
 
-- [ ] 2.1 Update `gossipgrid-client/src/types.rs` (or equivalent) to include `ItemBatchResponseEnvelope` for parsing responses.
-- [ ] 2.2 Add a `put_batch(items: Vec<ItemCreateUpdate>)` method in `gossipgrid-client/src/lib.rs`.
-- [ ] 2.3 Implement routing logic in `put_batch` to group items by partition leader using the cached topology.
-- [ ] 2.4 Execute concurrent HTTP `POST /items/batch` requests for each target leader.
-- [ ] 2.5 Aggregate the responses and return them to the caller.
+- [x] 2.1 Update `gossipgrid-client/src/types.rs` (or equivalent) to include `ItemBatchResponseEnvelope` for parsing responses.
+- [x] 2.2 Add a `put_batch(items: Vec<ItemCreateUpdate>)` method in `gossipgrid-client/src/lib.rs`.
+- [x] 2.3 Implement routing logic in `put_batch` to group items by partition leader using the cached topology.
+- [x] 2.4 Execute concurrent HTTP `POST /items/batch` requests for each target leader.
+- [x] 2.5 Aggregate the responses and return them to the caller.
 
 ## 3. Testing & Benchmarking
 
