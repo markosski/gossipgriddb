@@ -1,4 +1,4 @@
-use gossipgrid_client::GossipGridClient;
+use gossipgrid_client::{GossipGridClient, ItemCreateUpdate, base64_encode};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -6,7 +6,7 @@ mod common;
 use common::print_report;
 
 const SEED_NODE: &str = "127.0.0.1:3001";
-const NUM_REQUESTS: usize = 1_000_000;
+const NUM_REQUESTS: usize = 10_000;
 
 fn build_client(rt: &Runtime) -> GossipGridClient {
     rt.block_on(async {
@@ -40,7 +40,13 @@ fn main() {
                 let key = format!("latency_put:{i}");
                 let range = format!("range:{i}");
                 let value = format!("value_{i}_{:0>1000}", "");
-                client.put(&key, &range, value.as_bytes()).await
+                client
+                    .put(ItemCreateUpdate {
+                        partition_key: key,
+                        range_key: Some(range),
+                        message: base64_encode(value.as_bytes()),
+                    })
+                    .await
             }
         })
         .await

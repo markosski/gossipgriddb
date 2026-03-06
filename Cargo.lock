@@ -861,6 +861,7 @@ dependencies = [
  "env_logger",
  "fastcache",
  "futures",
+ "gossipgrid-client",
  "laminar",
  "log",
  "mlua",
@@ -885,6 +886,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "criterion",
+ "futures",
  "log",
  "reqwest",
  "serde",

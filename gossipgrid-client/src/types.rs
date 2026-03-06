@@ -66,3 +66,30 @@ impl fmt::Display for NodeAddress {
         write!(f, "{}:{}", self.ip, self.port)
     }
 }
+
+/// A request to create or update an item.
+///
+/// Mirrors the server's `ItemCreateUpdate` struct.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemCreateUpdate {
+    pub partition_key: String,
+    pub range_key: Option<String>,
+    pub message: String,
+}
+
+/// Error details for a single item in a batch operation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BatchItemError {
+    pub partition_key: String,
+    pub range_key: Option<String>,
+    pub reason: String,
+}
+
+/// Response envelope for batch write operations.
+///
+/// Contains the count of successfully inserted items and any per-item errors.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ItemBatchResponseEnvelope {
+    pub inserted: usize,
+    pub errors: Option<Vec<BatchItemError>>,
+}

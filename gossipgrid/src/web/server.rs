@@ -3,7 +3,7 @@ use crate::node::{NodeAddress, NodeState};
 use crate::web::functions::handle_list_functions;
 use crate::web::items::{
     handle_get_item_count, handle_get_items, handle_get_items_without_range, handle_post_item,
-    handle_remove_item, handle_remove_item_without_range,
+    handle_post_item_batch, handle_remove_item, handle_remove_item_without_range,
 };
 use crate::web::topology::handle_get_topology;
 use log::info;
@@ -31,6 +31,14 @@ pub async fn web_server_task(
     env: Arc<Env>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
+    let post_item_batch = warp::path!("items" / "batch")
+        .and(warp::post())
+        .and(warp::body::content_length_limit(1024 * 1024 * 10)) // 10 MB limit
+        .and(warp::body::json())
+        .and(with_memory(memory.clone()))
+        .and(with_env(env.clone()))
+        .and_then(handle_post_item_batch);
+
     let post_item = warp::path!("items")
         .and(warp::post())
         .and(warp::path::full())
@@ -94,7 +102,8 @@ pub async fn web_server_task(
         .expect("Failed to parse address for web server");
 
     let server = warp::serve(
-        post_item
+        post_item_batch
+            .or(post_item)
             .or(get_item)
             .or(get_items)
             .or(get_items_count)

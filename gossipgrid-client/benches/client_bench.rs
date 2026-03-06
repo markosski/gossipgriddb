@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use gossipgrid_client::GossipGridClient;
+use gossipgrid_client::{GossipGridClient, ItemCreateUpdate, base64_encode};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
@@ -27,7 +27,13 @@ fn bench_put(c: &mut Criterion) {
             let range = format!("range:{i}");
             let value = format!("value_{i}");
             rt.block_on(async {
-                let _ = client.put(&key, &range, value.as_bytes()).await;
+                let _ = client
+                    .put(ItemCreateUpdate {
+                        partition_key: key,
+                        range_key: Some(range),
+                        message: base64_encode(value.as_bytes()),
+                    })
+                    .await;
             });
             i += 1;
         });
@@ -45,7 +51,13 @@ fn bench_get(c: &mut Criterion) {
         for i in 0..100 {
             let key = format!("bench_read:{i}");
             let range = format!("range:{i}");
-            let _ = client.put(&key, &range, b"benchmark_value").await;
+            let _ = client
+                .put(ItemCreateUpdate {
+                    partition_key: key,
+                    range_key: Some(range),
+                    message: base64_encode(b"benchmark_value"),
+                })
+                .await;
         }
     });
 
@@ -76,7 +88,13 @@ fn bench_put_throughput(c: &mut Criterion) {
             let key = format!("bench_tp:{i}");
             let range = format!("range:{i}");
             rt.block_on(async {
-                let _ = client.put(&key, &range, b"throughput_test").await;
+                let _ = client
+                    .put(ItemCreateUpdate {
+                        partition_key: key,
+                        range_key: Some(range),
+                        message: base64_encode(b"throughput_test"),
+                    })
+                    .await;
             });
             i += 1;
         });
