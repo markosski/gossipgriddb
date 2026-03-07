@@ -14,6 +14,8 @@
 
 #[cfg(feature = "memory-store")]
 pub mod memory_store;
+#[cfg(feature = "sstable-store")]
+pub mod sstable_store;
 
 use std::{collections::HashMap, str::FromStr};
 

@@ -1,23 +1,23 @@
 ## 1. Project Setup
 
-- [ ] 1.1 Add `sstable` crate dependency to `gossipgrid/Cargo.toml`
-- [ ] 1.2 Add `sstable-store` feature flag to `gossipgrid/Cargo.toml` (not in default features)
-- [ ] 1.3 Create module `gossipgrid/src/store/sstable_store/` with `mod.rs`
+- [x] 1.1 Add `sstable` crate dependency to `gossipgrid/Cargo.toml`
+- [x] 1.2 Add `sstable-store` feature flag to `gossipgrid/Cargo.toml` (not in default features)
+- [x] 1.3 Create module `gossipgrid/src/store/sstable_store/` with `mod.rs`
 
 ## 2. Key Encoding
 
-- [ ] 2.1 Implement key encoding function: `StorageKey` → `{partition_key}/{range_key}` as `Vec<u8>`
-- [ ] 2.2 Implement key decoding function: `&[u8]` → `StorageKey`
-- [ ] 2.3 Add unit tests for key encoding/decoding roundtrip, edge cases (empty range key, special characters)
+- [x] 2.1 Implement key encoding function: `StorageKey` → `{partition_key}/{range_key}` as `Vec<u8>`
+- [x] 2.2 Implement key decoding function: `&[u8]` → `StorageKey`
+- [x] 2.3 Add unit tests for key encoding/decoding roundtrip, edge cases (empty range key, special characters)
 
 ## 3. Per-Partition Store
 
-- [ ] 3.1 Define `PartitionStore` struct holding: memtable (`BTreeMap<Vec<u8>, Item>`), list of SSTable file paths, partition directory path
-- [ ] 3.2 Implement `PartitionStore::get()` — check memtable first, then SSTables newest-to-oldest using `Table::get()`
-- [ ] 3.3 Implement `PartitionStore::get_many()` — merge memtable BTreeMap prefix iteration with SSTable `TableIterator` prefix scans, deduplicate by key (newest wins), reverse for descending order
-- [ ] 3.4 Implement `PartitionStore::insert()` — write to memtable BTreeMap
-- [ ] 3.5 Implement `PartitionStore::remove()` — write tombstone entry to memtable
-- [ ] 3.6 Implement `PartitionStore::count()` — count active (non-tombstoned) items across memtable and SSTables
+- [x] 3.1 Define `PartitionStore` struct holding: memtable (`BTreeMap<Vec<u8>, Item>`), list of SSTable file paths, partition directory path
+- [x] 3.2 Implement `PartitionStore::get()` — check memtable first, then SSTables newest-to-oldest using `Table::get()`
+- [x] 3.3 Implement `PartitionStore::get_many()` — merge memtable BTreeMap prefix iteration with SSTable `TableIterator` prefix scans, deduplicate by key (newest wins), reverse for descending order
+- [x] 3.4 Implement `PartitionStore::insert()` — write to memtable BTreeMap
+- [x] 3.5 Implement `PartitionStore::remove()` — write tombstone entry to memtable
+- [x] 3.6 Implement `PartitionStore::count()` — count active (non-tombstoned) items across memtable and SSTables
 
 ## 4. SstableStore (StoreEngine Implementation)
 
@@ -58,8 +58,8 @@
 
 ## 9. Testing
 
-- [ ] 9.1 Unit tests for `PartitionStore` CRUD operations (mirror existing `InMemoryStore` tests)
-- [ ] 9.2 Unit tests for `get_many` ordering, filtering, skip_null_rk, and limit
+- [x] 9.1 Unit tests for `PartitionStore` CRUD operations (mirror existing `InMemoryStore` tests)
+- [x] 9.2 Unit tests for `get_many` ordering, filtering, skip_null_rk, and limit
 - [ ] 9.3 Unit tests for flush: verify data persists after flush, memtable is cleared
 - [ ] 9.4 Unit tests for compaction: verify tombstones are removed, data integrity preserved
 - [ ] 9.5 Integration test: insert items, restart `SstableStore` (simulated), verify items are recovered from SSTable files

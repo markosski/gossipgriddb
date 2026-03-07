@@ -18,6 +18,7 @@ doctest = true
 [features]
 default = ["memory-store"]
 memory-store = []
+sstable-store = ["dep:sstable"]
 
 [dependencies]
 pwal = { version = "0.1.0" }
@@ -44,6 +45,7 @@ dashmap = "6.1.0"
 futures = "0.3.31"
 mlua = { version = "0.9", features = ["serialize", "lua54", "vendored"] }
 serde_urlencoded = "0.7"
+sstable = { version = "0.11.1", optional = true }
 
 
 [dev-dependencies]
