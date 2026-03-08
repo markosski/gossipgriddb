@@ -21,13 +21,13 @@
 
 ## 4. SstableStore (StoreEngine Implementation)
 
-- [ ] 4.1 Define `SstableStore` struct holding: `DashMap<PartitionId, PartitionStore>`, data directory path, flush threshold config
-- [ ] 4.2 Implement `StoreEngine::is_in_memory_store()` — return `false`
-- [ ] 4.3 Implement `StoreEngine::get()` — route to partition's `PartitionStore::get()` via `spawn_blocking`
-- [ ] 4.4 Implement `StoreEngine::get_many()` — route to partition's `PartitionStore::get_many()` via `spawn_blocking`
-- [ ] 4.5 Implement `StoreEngine::insert()` — route to partition's `PartitionStore::insert()`, check flush threshold
-- [ ] 4.6 Implement `StoreEngine::remove()` — route to partition's `PartitionStore::remove()`
-- [ ] 4.7 Implement `StoreEngine::partition_counts()` — aggregate counts from all `PartitionStore` instances
+- [x] 4.1 Define `SstableStore` struct holding: `DashMap<PartitionId, PartitionStore>`, data directory path, flush threshold config
+- [x] 4.2 Implement `StoreEngine::is_in_memory_store()` — return `false`
+- [x] 4.3 Implement `StoreEngine::get()` — route to partition's `PartitionStore::get()` via `spawn_blocking`
+- [x] 4.4 Implement `StoreEngine::get_many()` — route to partition's `PartitionStore::get_many()` via `spawn_blocking`
+- [x] 4.5 Implement `StoreEngine::insert()` — route to partition's `PartitionStore::insert()`, check flush threshold
+- [x] 4.6 Implement `StoreEngine::remove()` — route to partition's `PartitionStore::remove()`
+- [x] 4.7 Implement `StoreEngine::partition_counts()` — aggregate counts from all `PartitionStore` instances
 
 ## 5. Memtable Flush
 

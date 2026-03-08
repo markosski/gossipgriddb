@@ -16,7 +16,7 @@ doc = true
 doctest = true
 
 [features]
-default = ["memory-store"]
+default = ["memory-store", "sstable-store"]
 memory-store = []
 sstable-store = ["dep:sstable"]
 

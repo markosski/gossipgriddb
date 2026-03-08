@@ -1,4 +1,3 @@
-
 /// Utility functions for encoding and decoding string keys for SSTable storage.
 pub(crate) fn escape_key_component(component: &str) -> String {
     let mut escaped = String::with_capacity(component.len());
@@ -54,6 +53,7 @@ pub(crate) fn unescape_key_component(component: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
     fn foo_test() {
         let foobar = "foobar";
         let foo = &foobar[..3];
