@@ -14,7 +14,7 @@ use std::{
 
 use bincode::config;
 use dashmap::DashMap;
-use sstable::{Options, SSIterator, Table};
+use sstable::{Options, SSIterator, Table, TableBuilder};
 use string_utils::{escape_key_component, split_encoded_key, unescape_key_component};
 use tokio::sync::RwLock;
 
@@ -108,10 +108,14 @@ fn open_table(path: &PathBuf) -> Result<Table, DataStoreError> {
     })
 }
 
+const ITEM_OVERHEAD_BYTES: usize = 24; // Approximation for Item struct overhead (status enum + HLC + vec pointer)
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionStore {
     pub(crate) memtable: BTreeMap<Vec<u8>, Item>,
+    pub(crate) flushing_memtable: Option<Arc<BTreeMap<Vec<u8>, Item>>>,
+    pub(crate) memtable_size_bytes: usize,
     pub(crate) sstable_files: Vec<PathBuf>,
     pub(crate) partition_dir: PathBuf,
     pub(crate) active_count: usize,
@@ -129,6 +133,8 @@ impl PartitionStore {
 
         Ok(Self {
             memtable: BTreeMap::new(),
+            flushing_memtable: None,
+            memtable_size_bytes: 0,
             sstable_files: Vec::new(),
             partition_dir,
             active_count: 0,
@@ -141,6 +147,13 @@ impl PartitionStore {
         if let Some(item) = self.memtable.get(&encoded_key) {
             return Ok((item.status == ItemStatus::Active)
                 .then(|| ItemEntry::new(key.clone(), item.clone())));
+        }
+
+        if let Some(flushing) = &self.flushing_memtable {
+            if let Some(item) = flushing.get(&encoded_key) {
+                return Ok((item.status == ItemStatus::Active)
+                    .then(|| ItemEntry::new(key.clone(), item.clone())));
+            }
         }
 
         for path in self.sstable_files.iter().rev() {
@@ -210,7 +223,10 @@ impl PartitionStore {
             _ => {}
         }
 
-        self.memtable.insert(encode_storage_key(key), item);
+        let encoded_key = encode_storage_key(key);
+        // Approximation of size added: key length + message length + constant overhead for Item struct
+        self.memtable_size_bytes += Self::calculate_entry_size(key, &item);
+        self.memtable.insert(encoded_key, item);
         Ok(())
     }
 
@@ -225,7 +241,9 @@ impl PartitionStore {
             status: ItemStatus::Tombstone(hlc.timestamp),
             hlc,
         };
-        self.memtable.insert(encode_storage_key(key), tombstone);
+        let encoded_key = encode_storage_key(key);
+        self.memtable_size_bytes += Self::calculate_entry_size(key, &tombstone);
+        self.memtable.insert(encoded_key, tombstone);
         Ok(())
     }
 
@@ -234,12 +252,19 @@ impl PartitionStore {
     }
 
     #[allow(dead_code)]
+    // TODO: ensure this is reasonably performant
     pub(crate) fn recompute_count(&mut self) -> Result<(), DataStoreError> {
         let mut merged = HashMap::new();
 
         for path in &self.sstable_files {
             for (encoded_key, item) in read_all_sstable_entries(path)? {
                 merged.insert(encoded_key, item);
+            }
+        }
+
+        if let Some(flushing) = &self.flushing_memtable {
+            for (encoded_key, item) in flushing.iter() {
+                merged.insert(encoded_key.clone(), item.clone());
             }
         }
 
@@ -268,6 +293,16 @@ impl PartitionStore {
         }
 
         let start = Bound::Included(encoded_partition.clone());
+
+        if let Some(flushing) = &self.flushing_memtable {
+            for (encoded_key, item) in flushing.range((start.clone(), Bound::Unbounded)) {
+                if !matches_partition_key(encoded_key, &encoded_partition) {
+                    break;
+                }
+                merged.insert(encoded_key.clone(), item.clone());
+            }
+        }
+
         for (encoded_key, item) in self.memtable.range((start, Bound::Unbounded)) {
             if !matches_partition_key(encoded_key, &encoded_partition) {
                 break;
@@ -277,6 +312,53 @@ impl PartitionStore {
 
         Ok(merged)
     }
+
+    fn calculate_entry_size(key: &StorageKey, item: &Item) -> usize {
+        let encoded_key = encode_storage_key(key);
+        encoded_key.len() + item.message.len() + ITEM_OVERHEAD_BYTES
+    }
+
+    pub(crate) fn trigger_flush(&mut self) -> Option<Arc<BTreeMap<Vec<u8>, Item>>> {
+        if self.memtable.is_empty() || self.flushing_memtable.is_some() {
+            return None;
+        }
+        let memtable = std::mem::take(&mut self.memtable);
+        self.memtable_size_bytes = 0;
+        let arc = Arc::new(memtable);
+        self.flushing_memtable = Some(arc.clone());
+        Some(arc)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn complete_flush(&mut self, sstable_path: PathBuf) {
+        self.flushing_memtable = None;
+        self.sstable_files.push(sstable_path);
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn write_memtable_to_sstable(
+    memtable: &BTreeMap<Vec<u8>, Item>,
+    path: &PathBuf,
+) -> Result<(), DataStoreError> {
+    let file = fs::File::create(path).map_err(|err| {
+        DataStoreError::StoreOperationError(format!("failed to create SSTable file: {err}"))
+    })?;
+
+    let mut builder = TableBuilder::new(Options::default(), file);
+
+    for (encoded_key, item) in memtable {
+        let encoded_value = encode_item(item)?;
+        builder.add(encoded_key, &encoded_value).map_err(|err| {
+            DataStoreError::StoreOperationError(format!("failed to write to SSTable: {err}"))
+        })?;
+    }
+
+    builder.finish().map_err(|err| {
+        DataStoreError::StoreOperationError(format!("failed to finish SSTable: {err}"))
+    })?;
+
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -393,17 +475,60 @@ impl StoreEngine for SstableStore {
         };
 
         let key = key.clone();
+        let threshold = self.flush_threshold_bytes;
 
-        tokio::task::spawn_blocking(move || {
+        let data_to_flush = tokio::task::spawn_blocking(move || {
             let mut part = partition_store.blocking_write();
-            part.insert(&key, item)
+            part.insert(&key, item)?;
+            if part.memtable_size_bytes >= threshold {
+                let dir = part.partition_dir.clone();
+                Ok(part.trigger_flush().map(|arc| (arc, dir)))
+            } else {
+                Ok(None)
+            }
         })
         .await
         .unwrap_or_else(|err| {
             Err(DataStoreError::StoreGetOperationError(format!(
                 "spawn_blocking task failed: {err}"
             )))
-        })
+        })?;
+
+        if let Some((memtable_arc, partition_dir)) = data_to_flush {
+            let partition_store = self.partitions.get(partition).unwrap().value().clone();
+            let partition = partition.clone();
+            tokio::spawn(async move {
+                let timestamp = crate::clock::now_millis();
+                let file_name = format!("{}.sst", timestamp);
+                let sst_path = partition_dir.join(file_name);
+
+                let write_res = tokio::task::spawn_blocking({
+                    let memtable_arc = memtable_arc.clone();
+                    let sst_path = sst_path.clone();
+                    move || write_memtable_to_sstable(&memtable_arc, &sst_path)
+                })
+                .await
+                .unwrap_or_else(|err| {
+                    Err(DataStoreError::StoreOperationError(format!(
+                        "background flush spawn_blocking failed: {err}"
+                    )))
+                });
+
+                let mut part = partition_store.write().await;
+                if write_res.is_ok() {
+                    part.complete_flush(sst_path);
+                    // TODO: Emit Event::SstableFlushed(partition_id) here when added to EventBus
+                } else {
+                    part.flushing_memtable = None;
+                    log::error!(
+                        "Failed to flush SSTable for partition {}: {:?}",
+                        partition,
+                        write_res.err()
+                    );
+                }
+            });
+        }
+        Ok(())
     }
 
     async fn remove(
@@ -417,17 +542,61 @@ impl StoreEngine for SstableStore {
         };
 
         let key = key.clone();
+        let threshold = self.flush_threshold_bytes;
 
-        tokio::task::spawn_blocking(move || {
+        let data_to_flush = tokio::task::spawn_blocking(move || {
             let mut part = partition_store.blocking_write();
-            part.remove(&key, HLC::new().tick_hlc(clock::now_millis()))
+            part.remove(&key, HLC::new().tick_hlc(clock::now_millis()))?;
+            if part.memtable_size_bytes >= threshold {
+                let dir = part.partition_dir.clone();
+                Ok(part.trigger_flush().map(|arc| (arc, dir)))
+            } else {
+                Ok(None)
+            }
         })
         .await
         .unwrap_or_else(|err| {
             Err(DataStoreError::StoreGetOperationError(format!(
                 "spawn_blocking task failed: {err}"
             )))
-        })
+        })?;
+
+        if let Some((memtable_arc, partition_dir)) = data_to_flush {
+            let partition_store = self.partitions.get(partition).unwrap().value().clone();
+            let partition = partition.clone();
+            let partition = partition.clone();
+            tokio::spawn(async move {
+                let timestamp = crate::clock::now_millis();
+                let file_name = format!("{}.sst", timestamp);
+                let sst_path = partition_dir.join(file_name);
+
+                let write_res = tokio::task::spawn_blocking({
+                    let memtable_arc = memtable_arc.clone();
+                    let sst_path = sst_path.clone();
+                    move || write_memtable_to_sstable(&memtable_arc, &sst_path)
+                })
+                .await
+                .unwrap_or_else(|err| {
+                    Err(DataStoreError::StoreOperationError(format!(
+                        "background flush spawn_blocking failed: {err}"
+                    )))
+                });
+
+                let mut part = partition_store.write().await;
+                if write_res.is_ok() {
+                    part.complete_flush(sst_path);
+                    // TODO: Emit Event::SstableFlushed(partition_id) here when added to EventBus
+                } else {
+                    part.flushing_memtable = None;
+                    log::error!(
+                        "Failed to flush SSTable (remove) for partition {}: {:?}",
+                        partition,
+                        write_res.err()
+                    );
+                }
+            });
+        }
+        Ok(())
     }
 
     async fn partition_counts(&self) -> Result<HashMap<PartitionId, usize>, DataStoreError> {

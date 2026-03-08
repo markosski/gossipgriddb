@@ -62,21 +62,25 @@ The `sstable` crate provides immutable sorted string tables with `TableBuilder` 
 
 ### 4. Reuse existing `pwal` WAL for memtable durability
 
-**Decision:** Write mutations to the existing WAL (via `WalRecord::Put`/`WalRecord::Delete`) before applying to memtable. On restart, replay WAL into memtable instead of doing full store hydration.
+**Decision:** Write mutations to the existing WAL (via `WalRecord::Put`/`WalRecord::Delete`) before applying to memtable. On restart, replay remaining WAL segments into the store instead of executing a full store hydration strategy. Utilize an async event-driven architecture and a graceful shutdown flush to manage WAL file rotation safely.
 
-**Why:** The `pwal` crate and `WalRecord` types are already integrated. `hydrate_store_from_wal_task` already skips when `is_in_memory_store()` returns false — so the SSTable store returns `false`, and we handle our own WAL replay during store initialization. After each successful SSTable flush, truncate the WAL up to the flushed LSN.
+**Why:** The `pwal` crate supports per-partition log streams. Because `SstableStore` insertions into memtables are idempotent based on HLC timestamps, we completely decouple the WAL truncation logic from the storage engine:
+- Upon reaching a size threshold and successfully flushing an SSTable, `SstableStore` simply emits an `SstableFlushed(PartitionId)` event via `EventBus`.
+- An event listener instructs `pwal` to truncate its log, keeping only the most recent segment files for that partition (guaranteeing we keep unflushed items that straddled a segment boundary).
+- On a crash, the node restarts and `pwal` blindly replays its remaining segment records back into the memtable. Duplicate records that were already flushed to SSTables prior to the crash are idempotently merged or overwritten safely.
+- During a graceful shutdown, a new `StoreEngine::flush_all()` method forces all memtables to flush and emit events, resulting in near-zero WAL segments remaining, allowing instant/zero-replay boot times.
 
 ### 5. Memtable flush trigger: size-based threshold
 
 **Decision:** Flush memtable to a new SSTable file when it reaches a configurable size threshold (default: 4 MB estimated serialized size).
 
-**Why:** Simple, predictable. Time-based flushing could leave large memtables during write bursts. The flush runs on a background `tokio::task::spawn_blocking` since `TableBuilder` is synchronous.
+**Why:** Simple, predictable. Time-based flushing could leave large memtables during write bursts. The blocking `TableBuilder` disk write is offloaded to a detached background task (`tokio::spawn`), allowing the actual `insert` method to return `Ok(())` instantaneously when the size threshold is crossed.
 
 ### 6. Simple size-tiered compaction for v1
 
-**Decision:** When the number of SSTable files exceeds a threshold (e.g., 8 files), merge all files into one, dropping tombstoned entries.
+**Decision:** When the number of SSTable files exceeds a threshold (e.g., 8 files), merge all files into one, dropping tombstoned entries. This evaluation is triggered by the `EventBus` listener reacting to an `SstableFlushed` event.
 
-**Why:** Simplest compaction strategy. Prevents unbounded file growth while keeping implementation minimal. Can be upgraded to leveled compaction later if needed.
+**Why:** Simplest compaction strategy. Prevents unbounded file growth while keeping implementation minimal. Tying the trigger to the `SstableFlushed` event ensures we evaluate size bounds only when they are effectively increased, preventing tight-loop checks. Can be upgraded to leveled compaction later if needed.
 
 ### 7. Tombstone-based deletes
 

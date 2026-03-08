@@ -45,6 +45,8 @@ impl EventBus {
     }
 }
 
+// EventBus is ideal in cases where we want to notify node of some event happening.
+// Ideal actions to perform in response to event are ones that does not require update state other than node state.
 #[doc(hidden)]
 pub async fn start_event_loop(
     mut rx: mpsc::Receiver<Event>,

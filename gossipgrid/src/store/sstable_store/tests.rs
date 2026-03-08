@@ -246,3 +246,72 @@ fn test_partition_store_get_many_filtering_and_order() {
 
     fs::remove_dir_all(partition_dir).unwrap();
 }
+
+#[test]
+fn test_partition_store_flush_persists_data_and_clears_memtable() {
+    let partition_dir = temp_partition_dir("flush");
+    let mut store = PartitionStore::new(partition_dir.clone()).unwrap();
+    let pk = PartitionKey("user-1".to_string());
+
+    let key1 = StorageKey::new(pk.clone(), Some(RangeKey("001".to_string())));
+    let key2 = StorageKey::new(pk.clone(), Some(RangeKey("002".to_string())));
+
+    store.insert(&key1, test_item("val1", ItemStatus::Active)).unwrap();
+    store.insert(&key2, test_item("val2", ItemStatus::Active)).unwrap();
+
+    assert_eq!(store.memtable.len(), 2);
+    assert!(store.sstable_files.is_empty());
+
+    let arc_flushing = store.trigger_flush().unwrap();
+    assert!(store.memtable.is_empty());
+    assert!(store.flushing_memtable.is_some());
+    
+    let timestamp = crate::clock::now_millis();
+    let sst_path = partition_dir.join(format!("{}.sst", timestamp));
+    
+    write_memtable_to_sstable(&arc_flushing, &sst_path).unwrap();
+    store.complete_flush(sst_path);
+
+    assert!(store.flushing_memtable.is_none());
+    assert_eq!(store.sstable_files.len(), 1);
+
+    // Verify data can still be read
+    let entry1 = store.get(&key1).unwrap().unwrap();
+    assert_eq!(entry1.item.message, b"val1".to_vec());
+    let entry2 = store.get(&key2).unwrap().unwrap();
+    assert_eq!(entry2.item.message, b"val2".to_vec());
+    
+    fs::remove_dir_all(partition_dir).unwrap();
+}
+
+#[test]
+fn test_partition_store_reads_during_active_flush() {
+    let partition_dir = temp_partition_dir("flush-reads");
+    let mut store = PartitionStore::new(partition_dir.clone()).unwrap();
+    let pk = PartitionKey("user-reads".to_string());
+
+    let key1 = StorageKey::new(pk.clone(), Some(RangeKey("001".to_string())));
+    
+    store.insert(&key1, test_item("val1", ItemStatus::Active)).unwrap();
+    
+    // trigger flush but don't complete it yet
+    let _arc = store.trigger_flush().unwrap();
+    
+    // memtable is empty, but we can still read from flushing_memtable
+    assert!(store.memtable.is_empty());
+    
+    let entry = store.get(&key1).unwrap().unwrap();
+    assert_eq!(entry.item.message, b"val1".to_vec());
+    
+    // write a new item during flush
+    let key2 = StorageKey::new(pk.clone(), Some(RangeKey("002".to_string())));
+    store.insert(&key2, test_item("val2", ItemStatus::Active)).unwrap();
+    
+    assert_eq!(store.memtable.len(), 1);
+    
+    // both should be readable
+    let entry2 = store.get(&key2).unwrap().unwrap();
+    assert_eq!(entry2.item.message, b"val2".to_vec());
+    
+    fs::remove_dir_all(partition_dir).unwrap();
+}
