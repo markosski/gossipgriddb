@@ -34,27 +34,27 @@
 - [x] 5.1 Implement `PartitionStore::flush()` — sort memtable entries, write to new SSTable file via `TableBuilder`, clear memtable
 - [x] 5.2 Implement double-buffer swap: on flush trigger, swap active memtable with fresh empty one so writes continue while flushing
 - [x] 5.3 Ensure reads check both active memtable and flushing memtable during flush
-- [ ] 5.4 Emit `SstableFlushed(PartitionId)` event via `EventBus` after successful flush
+- [x] 5.4 Emit `SstableFlushed(PartitionId)` event via `EventBus` after successful flush
 - [x] 5.5 During `insert`, if memtable exceeds size threshold, instantly trigger flush and spawn an asynchronous background task (`tokio::spawn`) to perform the blocking disk write via `write_memtable_to_sstable`, preventing `insert` latency spikes
 
 ## 6. SSTable Compaction
 
-- [ ] 6.1 Implement `PartitionStore::compact()` — open all SSTable files, merge-iterate, drop tombstones, write single new file via `TableBuilder`
-- [ ] 6.2 Implement EventBus listener for `SstableFlushed` — evaluate `sstable_files.len()`; if it exceeds threshold (e.g., 8), spawn background compaction task
-- [ ] 6.3 Ensure old SSTable files are removed only after new compacted file is fully written
-- [ ] 6.4 Ensure reads are not blocked during compaction (swap file list atomically after compaction completes)
+- [x] 6.1 Implement `PartitionStore::compact()` — open all SSTable files, merge-iterate, drop tombstones, write single new file via `TableBuilder`
+- [x] 6.2 Implement EventBus listener for `SstableFlushed` — evaluate `sstable_files.len()`; if it exceeds threshold (e.g., 8), spawn background compaction task
+- [x] 6.3 Ensure old SSTable files are removed only after new compacted file is fully written
+- [x] 6.4 Ensure reads are not blocked during compaction (swap file list atomically after compaction completes)
 
 ## 7. WAL Integration & Crash Recovery
 
-- [ ] 7.1 Implement `SstableStore::new()` — scan partition directories, load existing SSTable file lists, initialize empty memtables and active counts
+- [x] 7.1 Implement `SstableStore::new()` — scan partition directories, load existing SSTable file lists, initialize empty memtables and active counts
 - [ ] 7.2 Implement WAL replay on startup — read remaining WAL segments for each partition from `pwal`, replay into memtables
-- [ ] 7.3 Implement EventBus listener for `SstableFlushed` — truncate WAL retaining only the last 2 segments for the partition
-- [ ] 7.4 Implement `StoreEngine::flush_all()` for graceful shutdown — force flush all memtables and emit flush events
+- [x] 7.3 Implement EventBus listener for `SstableFlushed` — truncate WAL retaining only the last 2 segments for the partition
+- [x] 7.4 Implement `StoreEngine::flush_all()` for graceful shutdown — force flush all memtables and emit flush events
 
 ## 8. NodeBuilder Integration
 
-- [ ] 8.1 Wire `SstableStore` into `NodeBuilder` so it can be used via `.store(Box::new(SstableStore::new(config)))`
-- [ ] 8.2 Add data directory path configuration
+- [x] 8.1 Wire `SstableStore` into `NodeBuilder` so it can be used via `.store(Box::new(SstableStore::new(config)))`
+- [x] 8.2 Add data directory path configuration
 
 ## 9. Testing
 

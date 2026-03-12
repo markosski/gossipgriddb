@@ -179,6 +179,10 @@ impl StoreEngine for InMemoryStore {
         }
         Ok(result)
     }
+
+    async fn shutdown(&self) -> Result<(), DataStoreError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

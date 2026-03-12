@@ -21,7 +21,7 @@ memory-store = []
 sstable-store = ["dep:sstable"]
 
 [dependencies]
-pwal = { version = "0.1.0" }
+pwal = { path = "../../pwal" }
 tokio = { version = "1.48.0", features = ["net", "sync", "time", "rt-multi-thread", "macros", "signal"] }
 warp = { version = "0.4.2", features = ["server"] }
 twox-hash = { version = "2.1.*" }

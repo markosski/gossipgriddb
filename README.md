@@ -126,3 +126,6 @@ cargo doc --no-deps --package gossipgrid --open
 
 ## 📄 License
 Licensed under [Apache-2.0](http://www.apache.org/licenses/LICENSE-2.0).
+
+## Disclaimer
+This project is built with the help of AI, not by AI.

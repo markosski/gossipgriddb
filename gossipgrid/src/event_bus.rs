@@ -8,15 +8,21 @@ use crate::{
     node::{JoinedNode, NodeState},
 };
 
+use futures::future::BoxFuture;
+
+pub type EventJob =
+    Box<dyn FnOnce(Arc<RwLock<NodeState>>, Arc<Env>) -> BoxFuture<'static, ()> + Send>;
+
 #[doc(hidden)]
 pub enum Event {
     StartInMemoryHydration,
+    Run(EventJob),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EventBus {
     pub tx: mpsc::Sender<Event>,
-    pub rx: std::sync::Mutex<Option<mpsc::Receiver<Event>>>,
+    pub rx: std::sync::Arc<std::sync::Mutex<Option<mpsc::Receiver<Event>>>>,
 }
 
 impl Default for EventBus {
@@ -30,7 +36,8 @@ impl EventBus {
         let (tx, rx) = mpsc::channel::<Event>(1024);
         Self {
             tx,
-            rx: std::sync::Mutex::new(Some(rx)),
+            // TODO why we changes to Arc?
+            rx: std::sync::Arc::new(std::sync::Mutex::new(Some(rx))),
         }
     }
 
@@ -43,10 +50,22 @@ impl EventBus {
             error!("Failed to emit event: {e}");
         }
     }
+
+    pub fn run<F, Fut>(&self, f: F)
+    where
+        F: FnOnce(Arc<RwLock<NodeState>>, Arc<Env>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let job = Box::new(move |node_state, env| {
+            let fut = f(node_state, env);
+            Box::pin(fut) as BoxFuture<'static, ()>
+        });
+        self.emit(Event::Run(job));
+    }
 }
 
 // EventBus is ideal in cases where we want to notify node of some event happening.
-// Ideal actions to perform in response to event are ones that does not require update state other than node state.
+// Ideal actions to perform in response to event are ones that do not require update state other than node state.
 #[doc(hidden)]
 pub async fn start_event_loop(
     mut rx: mpsc::Receiver<Event>,
@@ -75,6 +94,9 @@ pub async fn start_event_loop(
                                     let _ =
                                         JoinedNode::hydrate_store_from_wal_task(node_state.clone(), env.clone())
                                             .await;
+                                }
+                                Event::Run(job) => {
+                                    job(node_state.clone(), env.clone()).await;
                                 }
                             }
                         }

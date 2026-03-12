@@ -146,6 +146,8 @@ pub trait StoreEngine: Send + Sync {
     /// Get counts of items per partition
     /// Counts should exclude deleted items
     async fn partition_counts(&self) -> Result<HashMap<PartitionId, usize>, DataStoreError>;
+
+    async fn shutdown(&self) -> Result<(), DataStoreError>;
 }
 
 #[async_trait::async_trait]

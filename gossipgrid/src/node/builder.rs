@@ -37,7 +37,6 @@ use crate::cluster::Cluster;
 use crate::env::Env;
 use crate::event_bus::EventBus;
 use crate::store::Store;
-use crate::store::memory_store::InMemoryStore;
 use pwal::wal::WalLocalFile;
 
 use super::address::NodeAddress;
@@ -213,11 +212,6 @@ impl NodeBuilder {
             ));
         }
 
-        // Create store (default to InMemoryStore)
-        let store: Box<dyn Store + Send + Sync> = self
-            .store
-            .unwrap_or_else(|| Box::new(InMemoryStore::default()));
-
         // Determine WAL namespace
         let wal_namespace = if self.is_ephemeral {
             EPHEMERAL.to_string()
@@ -225,6 +219,38 @@ impl NodeBuilder {
             config.cluster_name.clone()
         } else {
             EPHEMERAL.to_string()
+        };
+
+        // Create EventBus
+        let bus = EventBus::new();
+
+        // Create store (default to SstableStore if feature enabled)
+        let store: Box<dyn Store + Send + Sync> = match self.store {
+            Some(store) => store,
+            None => {
+                #[cfg(feature = "sstable-store")]
+                {
+                    let data_dir = crate::fs::data_dir(&wal_namespace);
+                    // 1MB flush threshold
+                    let flush_thresh = 1024 * 1024;
+                    Box::new(
+                        crate::store::sstable_store::SstableStore::new(
+                            data_dir,
+                            bus.clone(),
+                            flush_thresh,
+                        )
+                        .map_err(|e| {
+                            NodeError::ConfigurationError(format!(
+                                "Failed to create SstableStore: {e}"
+                            ))
+                        })?,
+                    )
+                }
+                #[cfg(not(feature = "sstable-store"))]
+                {
+                    Box::new(crate::store::memory_store::InMemoryStore::default())
+                }
+            }
         };
 
         // Create WAL
@@ -236,8 +262,7 @@ impl NodeBuilder {
         .await
         .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?;
 
-        // Create EventBus and Env
-        let bus = EventBus::new();
+        // Create Env
         let env: Arc<Env> = Arc::new(Env::new(store, Box::new(wal), bus));
 
         // Create NodeState
