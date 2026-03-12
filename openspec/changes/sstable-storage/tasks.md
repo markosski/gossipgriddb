@@ -47,7 +47,7 @@
 ## 7. WAL Integration & Crash Recovery
 
 - [x] 7.1 Implement `SstableStore::new()` — scan partition directories, load existing SSTable file lists, initialize empty memtables and active counts
-- [ ] 7.2 Implement WAL replay on startup — read remaining WAL segments for each partition from `pwal`, replay into memtables
+- [x] 7.2 Implement WAL replay on startup — read remaining WAL segments for each partition from `pwal`, replay into memtables
 - [x] 7.3 Implement EventBus listener for `SstableFlushed` — truncate WAL retaining only the last 2 segments for the partition
 - [x] 7.4 Implement `StoreEngine::flush_all()` for graceful shutdown — force flush all memtables and emit flush events
 
@@ -55,6 +55,7 @@
 
 - [x] 8.1 Wire `SstableStore` into `NodeBuilder` so it can be used via `.store(Box::new(SstableStore::new(config)))`
 - [x] 8.2 Add data directory path configuration
+- [x] 8.3 Configure WAL segment size to be ~20% larger than the `SstableStore` flush threshold (e.g. 4.8MB for a 4MB flush threshold) to prevent data loss on WAL truncation.
 
 ## 9. Testing
 

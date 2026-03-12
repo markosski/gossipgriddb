@@ -323,7 +323,7 @@ impl PreJoinNode {
         joined_node.load_node_metadata()?;
 
         // hydrate store if needed
-        bus.emit(Event::StartInMemoryHydration);
+        bus.emit(Event::StartMemtableHydration);
 
         Ok(joined_node)
     }
@@ -719,8 +719,7 @@ impl JoinedNode {
     }
 
     // TODO: ensure proper error
-    /// Upon node restart, hydrate in-memory store by replaying WAL.
-    /// Note this is only used for in-memory implementations of Store which need a re-load of data on every start
+    /// Upon node restart, hydrate store by replaying WAL.
     pub async fn hydrate_store_from_wal_task(
         node_state: Arc<RwLock<NodeState>>,
         env: Arc<Env>,
@@ -754,22 +753,6 @@ impl JoinedNode {
         }
 
         info!("node={node_address}; Started hydrating store from WAL");
-        let store = env.get_store();
-
-        if !store.is_in_memory_store() {
-            let mut node_state = node_state.write().await;
-            if let Some(this_node) = node_state.as_joined_node_mut() {
-                this_node.is_hydrating = false;
-                let simple_node = this_node.get_simple_node();
-                if this_node
-                    .cluster
-                    .update_assignment_state_for_this_node(&simple_node)
-                {
-                    this_node.tick_hlc();
-                }
-            }
-            return Ok(());
-        }
 
         let partitions = {
             let node_state = node_state.read().await;
@@ -816,15 +799,28 @@ impl JoinedNode {
                                     }
                                 };
 
-                            let result = rt.block_on(store.insert(
-                                &partition,
-                                &storage_key,
-                                framed_item.item,
-                            ));
+                            let should_insert = match rt.block_on(store.get(&partition, &storage_key)) {
+                                Ok(Some(existing_entry)) => {
+                                    framed_item.item.hlc > existing_entry.item.hlc
+                                }
+                                Ok(None) => true,
+                                Err(e) => {
+                                    error!("node={node_address}; Error getting item during WAL replay: {e}");
+                                    false
+                                }
+                            };
 
-                            if let Err(e) = result {
-                                error!("node={node_address}; Error inserting item: {e}");
-                                continue;
+                            if should_insert {
+                                let result = rt.block_on(store.insert(
+                                    &partition,
+                                    &storage_key,
+                                    framed_item.item.clone(),
+                                ));
+
+                                if let Err(e) = result {
+                                    error!("node={node_address}; Error inserting item: {e}");
+                                    continue;
+                                }
                             }
                         }
                         Err(e) => {

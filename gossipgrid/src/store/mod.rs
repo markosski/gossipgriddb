@@ -110,9 +110,6 @@ impl Default for GetManyOptions {
 
 #[async_trait::async_trait]
 pub trait StoreEngine: Send + Sync {
-    /// Is this purely in-memory implementation?
-    fn is_in_memory_store(&self) -> bool;
-
     /// Get item by key and range_key
     async fn get(
         &self,

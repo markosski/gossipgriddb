@@ -309,7 +309,7 @@ pub async fn start_node(
     .await;
     let bus = env.get_event_bus();
     // If this is a new node, we need to start the in memory hydration process if applicable
-    bus.emit(Event::StartInMemoryHydration);
+    bus.emit(Event::StartMemtableHydration);
 
     let runtime_handle = tokio::spawn(async move {
         // Ensure the blocking shutdown guard lives as long as this task

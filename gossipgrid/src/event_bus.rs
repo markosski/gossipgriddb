@@ -15,7 +15,7 @@ pub type EventJob =
 
 #[doc(hidden)]
 pub enum Event {
-    StartInMemoryHydration,
+    StartMemtableHydration,
     Run(EventJob),
 }
 
@@ -90,7 +90,7 @@ pub async fn start_event_loop(
                     match maybe_ev {
                         Some(ev) => {
                             match ev {
-                                Event::StartInMemoryHydration => {
+                                Event::StartMemtableHydration => {
                                     let _ =
                                         JoinedNode::hydrate_store_from_wal_task(node_state.clone(), env.clone())
                                             .await;

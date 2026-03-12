@@ -232,7 +232,7 @@ impl NodeBuilder {
                 {
                     let data_dir = crate::fs::data_dir(&wal_namespace);
                     // 1MB flush threshold
-                    let flush_thresh = 1024 * 1024;
+                    let flush_thresh = 4 * 1024 * 1024;
                     Box::new(
                         crate::store::sstable_store::SstableStore::new(
                             data_dir,
@@ -257,7 +257,7 @@ impl NodeBuilder {
         let wal = WalLocalFile::new(
             crate::fs::wal_dir(&wal_namespace),
             self.is_ephemeral,
-            64 * 1024 * 1024,
+            5 * 1024 * 1024,
         )
         .await
         .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?;

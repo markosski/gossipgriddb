@@ -70,11 +70,13 @@ The `sstable` crate provides immutable sorted string tables with `TableBuilder` 
 - On a crash, the node restarts and `pwal` blindly replays its remaining segment records back into the memtable. Duplicate records that were already flushed to SSTables prior to the crash are idempotently merged or overwritten safely.
 - During a graceful shutdown, a new `StoreEngine::flush_all()` method forces all memtables to flush and emit events, resulting in near-zero WAL segments remaining, allowing instant/zero-replay boot times.
 
-### 5. Memtable flush trigger: size-based threshold
+### 5. Memtable flush trigger and segment sizing
 
-**Decision:** Flush memtable to a new SSTable file when it reaches a configurable size threshold (default: 4 MB estimated serialized size).
+**Decision:** Flush memtable to a new SSTable file when it reaches a configurable size threshold (default: 4 MB estimated serialized size). The WAL segment size must be configured to be slightly larger (e.g., ~20% larger, such as 4.8 MB) than the SSTable flush threshold.
 
-**Why:** Simple, predictable. Time-based flushing could leave large memtables during write bursts. The blocking `TableBuilder` disk write is offloaded to a detached background task (`tokio::spawn`), allowing the actual `insert` method to return `Ok(())` instantaneously when the size threshold is crossed.
+**Why:**
+- **Predictable Flushing:** Simple and predictable. Time-based flushing could leave large memtables during write bursts. The blocking `TableBuilder` disk write is offloaded to a detached background task (`tokio::spawn`), allowing the actual `insert` method to return `Ok(())` instantaneously when the size threshold is crossed.
+- **Safe WAL Truncation:** Setting the WAL segment size ~20% larger than the SSTable flush threshold ensures that a single fully rolled WAL segment has enough capacity to persist an entire unflushed memtable, safely absorbing WAL serialization overhead. When we retain only the latest 2 WAL segments for a partition after a flush, this sizing mathematically guarantees no unflushed writes are lost, while bounding crash recovery replay at roughly 9.6MB maximum per partition.
 
 ### 6. Simple size-tiered compaction for v1
 

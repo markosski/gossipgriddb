@@ -338,7 +338,9 @@ impl PartitionStore {
         self.sstable_files.push(sstable_path);
     }
 
-    pub(crate) fn compact(&self) -> Result<Option<(PathBuf, Vec<PathBuf>, BTreeMap<Vec<u8>, Item>)>, DataStoreError> {
+    pub(crate) fn compact(
+        &self,
+    ) -> Result<Option<(PathBuf, Vec<PathBuf>, BTreeMap<Vec<u8>, Item>)>, DataStoreError> {
         if self.sstable_files.len() < 8 {
             return Ok(None);
         }
@@ -406,10 +408,7 @@ impl PartitionStore {
             if write_res.is_ok() {
                 self.complete_compaction(new_path, old_paths);
             } else {
-                log::error!(
-                    "Failed to write compacted SSTable to {:?}",
-                    new_path
-                );
+                log::error!("Failed to write compacted SSTable to {:?}", new_path);
             }
         }
 
@@ -846,10 +845,6 @@ impl StoreEngine for SstableStore {
             counts.insert(partition_id, store.count()?);
         }
         Ok(counts)
-    }
-
-    fn is_in_memory_store(&self) -> bool {
-        false
     }
 
     async fn shutdown(&self) -> Result<(), DataStoreError> {
