@@ -34,13 +34,13 @@
 - [x] 5.1 Implement `PartitionStore::flush()` — sort memtable entries, write to new SSTable file via `TableBuilder`, clear memtable
 - [x] 5.2 Implement double-buffer swap: on flush trigger, swap active memtable with fresh empty one so writes continue while flushing
 - [x] 5.3 Ensure reads check both active memtable and flushing memtable during flush
-- [x] 5.4 Emit `SstableFlushed(PartitionId)` event via `EventBus` after successful flush
+- [x] 5.4 After successful flush, directly call `wal.purge_segments()` retaining latest 2 segments for the partition
 - [x] 5.5 During `insert`, if memtable exceeds size threshold, instantly trigger flush and spawn an asynchronous background task (`tokio::spawn`) to perform the blocking disk write via `write_memtable_to_sstable`, preventing `insert` latency spikes
 
 ## 6. SSTable Compaction
 
 - [x] 6.1 Implement `PartitionStore::compact()` — open all SSTable files, merge-iterate, drop tombstones, write single new file via `TableBuilder`
-- [x] 6.2 Implement EventBus listener for `SstableFlushed` — evaluate `sstable_files.len()`; if it exceeds threshold (e.g., 8), spawn background compaction task
+- [x] 6.2 After WAL purge, evaluate `sstable_files.len()`; if it exceeds threshold (e.g., 8), trigger compaction inline
 - [x] 6.3 Ensure old SSTable files are removed only after new compacted file is fully written
 - [x] 6.4 Ensure reads are not blocked during compaction (swap file list atomically after compaction completes)
 
@@ -48,8 +48,8 @@
 
 - [x] 7.1 Implement `SstableStore::new()` — scan partition directories, load existing SSTable file lists, initialize empty memtables and active counts
 - [x] 7.2 Implement WAL replay on startup — read remaining WAL segments for each partition from `pwal`, replay into memtables
-- [x] 7.3 Implement EventBus listener for `SstableFlushed` — truncate WAL retaining only the last 2 segments for the partition
-- [x] 7.4 Implement `StoreEngine::flush_all()` for graceful shutdown — force flush all memtables and emit flush events
+- [x] 7.3 After flush, truncate WAL via direct `wal.purge_segments()` call, retaining only the last 2 segments for the partition
+- [x] 7.4 Implement `StoreEngine::shutdown()` for graceful shutdown — force flush all memtables synchronously
 
 ## 8. NodeBuilder Integration
 
@@ -62,7 +62,7 @@
 - [x] 9.1 Unit tests for `PartitionStore` CRUD operations (mirror existing `InMemoryStore` tests)
 - [x] 9.2 Unit tests for `get_many` ordering, filtering, skip_null_rk, and limit
 - [x] 9.3 Unit tests for flush: verify data persists after flush, memtable is cleared
-- [ ] 9.4 Unit tests for compaction: verify tombstones are removed, data integrity preserved
+- [x] 9.4 Unit tests for compaction: verify tombstones are removed, data integrity preserved
 - [ ] 9.5 Integration test: insert items, restart `SstableStore` (simulated), verify items are recovered from SSTable files
 - [ ] 9.6 Integration test: WAL replay — insert items, simulate crash (don't flush), restart, verify recovery from WAL
 - [x] 9.7 Integration test: reads during flush — concurrent read/write during active flush

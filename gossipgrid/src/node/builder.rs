@@ -37,6 +37,8 @@ use crate::cluster::Cluster;
 use crate::env::Env;
 use crate::event_bus::EventBus;
 use crate::store::Store;
+use crate::wal::WalRecord;
+use pwal::Wal;
 use pwal::wal::WalLocalFile;
 
 use super::address::NodeAddress;
@@ -221,6 +223,17 @@ impl NodeBuilder {
             EPHEMERAL.to_string()
         };
 
+        // Create WAL
+        let wal: Arc<dyn Wal<WalRecord> + Send + Sync> = Arc::new(
+            WalLocalFile::new(
+                crate::fs::wal_dir(&wal_namespace),
+                self.is_ephemeral,
+                5 * 1024 * 1024,
+            )
+            .await
+            .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?,
+        );
+
         // Create EventBus
         let bus = EventBus::new();
 
@@ -236,7 +249,7 @@ impl NodeBuilder {
                     Box::new(
                         crate::store::sstable_store::SstableStore::new(
                             data_dir,
-                            bus.clone(),
+                            wal.clone(),
                             flush_thresh,
                         )
                         .map_err(|e| {
@@ -253,17 +266,8 @@ impl NodeBuilder {
             }
         };
 
-        // Create WAL
-        let wal = WalLocalFile::new(
-            crate::fs::wal_dir(&wal_namespace),
-            self.is_ephemeral,
-            5 * 1024 * 1024,
-        )
-        .await
-        .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?;
-
         // Create Env
-        let env: Arc<Env> = Arc::new(Env::new(store, Box::new(wal), bus));
+        let env: Arc<Env> = Arc::new(Env::new(store, wal, bus));
 
         // Create NodeState
         let node_state = Arc::new(RwLock::new(NodeState::init(

@@ -96,7 +96,7 @@ The system SHALL flush the in-memory write buffer (memtable) to an immutable SST
 - **WHEN** the memtable for a partition exceeds the configured size threshold (default: 4 MB)
 - **THEN** the memtable SHALL be flushed to a new SSTable file in that partition's directory
 - **AND** a fresh empty memtable SHALL replace the flushed one
-- **AND** the WAL SHALL be truncated up to the flushed LSN
+- **AND** the WAL SHALL be purged, retaining only the latest 2 segments for the partition
 
 #### Scenario: Reads during flush
 - **WHEN** a flush is in progress for a partition

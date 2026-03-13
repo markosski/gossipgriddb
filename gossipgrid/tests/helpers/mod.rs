@@ -64,7 +64,7 @@ pub async fn start_test_cluster_with_env(
 
     let env1: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
-        Box::new(
+        Arc::new(
             WalLocalFile::new(
                 gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_1")),
                 true,
@@ -78,7 +78,7 @@ pub async fn start_test_cluster_with_env(
 
     let env2: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
-        Box::new(
+        Arc::new(
             WalLocalFile::new(
                 gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_2")),
                 true,
@@ -92,7 +92,7 @@ pub async fn start_test_cluster_with_env(
 
     let env3: Arc<Env> = Arc::new(env::Env::new(
         Box::new(InMemoryStore::default()),
-        Box::new(
+        Arc::new(
             WalLocalFile::new(
                 gossipgrid::fs::wal_dir(&format!("{test_uuid}/wal_3")),
                 true,

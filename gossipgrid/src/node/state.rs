@@ -799,13 +799,17 @@ impl JoinedNode {
                                     }
                                 };
 
-                            let should_insert = match rt.block_on(store.get(&partition, &storage_key)) {
+                            let should_insert = match rt
+                                .block_on(store.get(&partition, &storage_key))
+                            {
                                 Ok(Some(existing_entry)) => {
                                     framed_item.item.hlc > existing_entry.item.hlc
                                 }
                                 Ok(None) => true,
                                 Err(e) => {
-                                    error!("node={node_address}; Error getting item during WAL replay: {e}");
+                                    error!(
+                                        "node={node_address}; Error getting item during WAL replay: {e}"
+                                    );
                                     false
                                 }
                             };

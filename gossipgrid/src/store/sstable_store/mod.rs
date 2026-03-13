@@ -14,7 +14,8 @@ use std::{
 
 use bincode::config;
 use dashmap::DashMap;
-use log::{error, info};
+use log::info;
+use pwal::Wal;
 use sstable::{Options, SSIterator, Table, TableBuilder};
 use string_utils::{escape_key_component, split_encoded_key, unescape_key_component};
 use tokio::sync::RwLock;
@@ -23,16 +24,16 @@ use crate::{
     StoreEngine,
     clock::{self, HLC},
     cluster::PartitionId,
-    env::Env,
     item::{Item, ItemEntry, ItemStatus},
-    node::NodeState,
     store::{DataStoreError, GetManyOptions, PartitionKey, RangeKey, StorageKey},
+    wal::WalRecord,
 };
 
 #[cfg(test)]
 mod tests;
 
-#[allow(dead_code)]
+const MAX_SSTABLE_SEGMENTS: usize = 8;
+
 pub(crate) fn encode_storage_key(key: &StorageKey) -> Vec<u8> {
     let mut encoded = escape_key_component(key.partition_key.value());
     if let Some(range_key) = &key.range_key {
@@ -42,7 +43,6 @@ pub(crate) fn encode_storage_key(key: &StorageKey) -> Vec<u8> {
     encoded.into_bytes()
 }
 
-#[allow(dead_code)]
 pub(crate) fn decode_storage_key(encoded: &[u8]) -> Result<StorageKey, DataStoreError> {
     let encoded = std::str::from_utf8(encoded).map_err(|err| {
         DataStoreError::StorageKeyParsingError(format!("invalid UTF-8 key bytes: {err}"))
@@ -70,12 +70,10 @@ pub(crate) fn decode_storage_key(encoded: &[u8]) -> Result<StorageKey, DataStore
     Ok(StorageKey::new(partition_key, range_key))
 }
 
-#[allow(dead_code)]
 fn encoded_partition_prefix(partition_key: &PartitionKey) -> Vec<u8> {
     escape_key_component(partition_key.value()).into_bytes()
 }
 
-#[allow(dead_code)]
 fn matches_partition_key(encoded_key: &[u8], encoded_partition_prefix: &[u8]) -> bool {
     encoded_key == encoded_partition_prefix
         || encoded_key
@@ -83,14 +81,12 @@ fn matches_partition_key(encoded_key: &[u8], encoded_partition_prefix: &[u8]) ->
             .is_some_and(|suffix| suffix.first() == Some(&b'/'))
 }
 
-#[allow(dead_code)]
 fn encode_item(item: &Item) -> Result<Vec<u8>, DataStoreError> {
     bincode::encode_to_vec(item, config::standard()).map_err(|err| {
         DataStoreError::StoreOperationError(format!("failed to encode item for SSTable: {err}"))
     })
 }
 
-#[allow(dead_code)]
 fn decode_item(bytes: &[u8]) -> Result<Item, DataStoreError> {
     bincode::decode_from_slice(bytes, config::standard())
         .map(|(item, _)| item)
@@ -101,7 +97,6 @@ fn decode_item(bytes: &[u8]) -> Result<Item, DataStoreError> {
         })
 }
 
-#[allow(dead_code)]
 fn open_table(path: &PathBuf) -> Result<Table, DataStoreError> {
     Table::new_from_file(Options::default(), path).map_err(|err| {
         DataStoreError::StoreOperationError(format!(
@@ -113,7 +108,6 @@ fn open_table(path: &PathBuf) -> Result<Table, DataStoreError> {
 
 const ITEM_OVERHEAD_BYTES: usize = 24; // Approximation for Item struct overhead (status enum + HLC + vec pointer)
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct PartitionStore {
     pub(crate) memtable: BTreeMap<Vec<u8>, Item>,
@@ -124,7 +118,6 @@ pub(crate) struct PartitionStore {
     pub(crate) active_count: usize,
 }
 
-#[allow(dead_code)]
 impl PartitionStore {
     pub(crate) fn new(partition_dir: PathBuf) -> Result<Self, DataStoreError> {
         fs::create_dir_all(&partition_dir).map_err(|err| {
@@ -254,7 +247,6 @@ impl PartitionStore {
         Ok(self.active_count)
     }
 
-    #[allow(dead_code)]
     // TODO: ensure this is reasonably performant
     pub(crate) fn recompute_count(&mut self) -> Result<(), DataStoreError> {
         let mut merged = HashMap::new();
@@ -341,7 +333,7 @@ impl PartitionStore {
     pub(crate) fn compact(
         &self,
     ) -> Result<Option<(PathBuf, Vec<PathBuf>, BTreeMap<Vec<u8>, Item>)>, DataStoreError> {
-        if self.sstable_files.len() < 8 {
+        if self.sstable_files.len() < MAX_SSTABLE_SEGMENTS {
             return Ok(None);
         }
 
@@ -416,7 +408,6 @@ impl PartitionStore {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn write_memtable_to_sstable(
     memtable: &BTreeMap<Vec<u8>, Item>,
     path: &PathBuf,
@@ -441,7 +432,6 @@ pub(crate) fn write_memtable_to_sstable(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn read_partition_entries(
     path: &PathBuf,
     encoded_partition: &[u8],
@@ -471,7 +461,6 @@ fn read_partition_entries(
     Ok(entries)
 }
 
-#[allow(dead_code)]
 fn read_all_sstable_entries(path: &PathBuf) -> Result<Vec<(Vec<u8>, Item)>, DataStoreError> {
     let table = open_table(path)?;
     let mut iter = table.iter();
@@ -484,18 +473,17 @@ fn read_all_sstable_entries(path: &PathBuf) -> Result<Vec<(Vec<u8>, Item)>, Data
     Ok(entries)
 }
 
-#[allow(dead_code)]
 pub struct SstableStore {
     partitions: DashMap<PartitionId, Arc<RwLock<PartitionStore>>>,
     data_dir: PathBuf,
     flush_threshold_bytes: usize,
-    event_bus: crate::event_bus::EventBus,
+    wal: Arc<dyn Wal<WalRecord>>,
 }
 
 impl SstableStore {
     pub fn new(
         data_dir: PathBuf,
-        event_bus: crate::event_bus::EventBus,
+        wal: Arc<dyn Wal<WalRecord>>,
         flush_threshold_bytes: usize,
     ) -> Result<Self, DataStoreError> {
         let partitions = DashMap::new();
@@ -566,7 +554,7 @@ impl SstableStore {
             partitions,
             data_dir,
             flush_threshold_bytes,
-            event_bus,
+            wal,
         })
     }
 }
@@ -664,7 +652,8 @@ impl StoreEngine for SstableStore {
         if let Some((memtable_arc, partition_dir)) = data_to_flush {
             let partition_store = self.partitions.get(partition).unwrap().value().clone();
             let partition = partition.clone();
-            let event_bus = self.event_bus.clone();
+            let wal = self.wal.clone();
+
             tokio::spawn(async move {
                 let timestamp = crate::clock::now_millis();
                 let file_name = format!("{}.sst", timestamp);
@@ -688,12 +677,11 @@ impl StoreEngine for SstableStore {
                         part.complete_flush(sst_path);
                     }
 
-                    // TODO: let's think more about this part in both insert and remove
                     let partition_store_clone = partition_store.clone();
-                    event_bus.run(
-                        move |_node_state: Arc<RwLock<NodeState>>, env: Arc<Env>| async move {
-                            let mut part = partition_store_clone.write().await;
-                            let wal = env.get_wal();
+
+                    let handle = tokio::runtime::Handle::current();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        handle.block_on(async move {
                             if let Err(e) = wal
                                 .purge_segments(
                                     partition.into(),
@@ -702,12 +690,13 @@ impl StoreEngine for SstableStore {
                                 .await
                             {
                                 log::error!(
-                                    "Failed to purge WAL for partition {}: {:?}",
+                                    "Failed to purge WAL (remove) for partition {}: {:?}",
                                     partition,
                                     e
                                 );
                             }
 
+                            let mut part = partition_store_clone.write().await;
                             if let Err(e) = part.trigger_partition_compaction().await {
                                 log::error!(
                                     "Failed to trigger compaction for partition {}: {:?}",
@@ -715,8 +704,8 @@ impl StoreEngine for SstableStore {
                                     e
                                 );
                             }
-                        },
-                    );
+                        });
+                    });
                 } else {
                     let mut part = partition_store.write().await;
                     part.flushing_memtable = None;
@@ -771,7 +760,8 @@ impl StoreEngine for SstableStore {
         if let Some((memtable_arc, partition_dir)) = data_to_flush {
             let partition_store = self.partitions.get(partition).unwrap().value().clone();
             let partition = partition.clone();
-            let event_bus = self.event_bus.clone();
+            let wal = self.wal.clone();
+
             tokio::spawn(async move {
                 let timestamp = crate::clock::now_millis();
                 let file_name = format!("{}.sst", timestamp);
@@ -796,10 +786,10 @@ impl StoreEngine for SstableStore {
                     }
 
                     let partition_store_clone = partition_store.clone();
-                    event_bus.run(move |_node_state: Arc<RwLock<NodeState>>, env: Arc<Env>| {
-                        Box::pin(async move {
-                            let mut part = partition_store_clone.write().await;
-                            let wal = env.get_wal();
+
+                    let handle = tokio::runtime::Handle::current();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        handle.block_on(async move {
                             if let Err(e) = wal
                                 .purge_segments(
                                     partition.into(),
@@ -814,6 +804,7 @@ impl StoreEngine for SstableStore {
                                 );
                             }
 
+                            let mut part = partition_store_clone.write().await;
                             if let Err(e) = part.trigger_partition_compaction().await {
                                 log::error!(
                                     "Failed to trigger compaction for partition {}: {:?}",
@@ -821,7 +812,7 @@ impl StoreEngine for SstableStore {
                                     e
                                 );
                             }
-                        })
+                        });
                     });
                 } else {
                     let mut part = partition_store.write().await;
@@ -869,12 +860,8 @@ impl StoreEngine for SstableStore {
                 let mut part = partition_store.write().await;
                 part.complete_flush(sst_path);
 
-                // For flush_all, we don't necessarily need to trigger compaction or WAL purge here,
-                // but the design says "result in near-zero WAL segments remaining".
-                // The EventBus usually handles this, but flush_all might be called at shutdown.
-                // We'll skip the EventBus here to ensure it's synchronous and completed before return.
-                // However, we should still truncate WAL.
-                // Actually, the caller might expect this to be synchronous.
+                // Shutdown flush is synchronous — WAL purge is handled during normal
+                // insert/remove flush cycles, not here. We just ensure memtables are persisted.
             }
         }
         Ok(())

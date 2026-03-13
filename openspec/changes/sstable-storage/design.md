@@ -2,7 +2,7 @@
 
 GossipGrid currently only supports `InMemoryStore` — a `DashMap`-based implementation of the `StoreEngine` trait. Data survives restarts only because the WAL (`pwal`) replays into the in-memory store on startup (`hydrate_store_from_wal_task`). This works but means every restart replays the entire WAL, and memory is the scaling limit.
 
-The storage architecture is pluggable: `NodeBuilder::store()` accepts `Box<dyn Store + Send + Sync>`, and `Env` holds the store alongside a separate WAL instance. The `StoreEngine` trait defines 5 operations: `get`, `get_many`, `insert`, `remove`, and `partition_counts`.
+The storage architecture is pluggable: `NodeBuilder::store()` accepts `Box<dyn Store + Send + Sync>`, and `Env` holds the store alongside a separate WAL instance. `SstableStore` also holds its own `Arc<dyn Wal<WalRecord>>` reference for direct WAL purge and segment management. The `StoreEngine` trait defines 5 operations: `get`, `get_many`, `insert`, `remove`, and `partition_counts`.
 
 The `sstable` crate provides immutable sorted string tables with `TableBuilder` (write, keys must be added in sorted order), `Table` (read via `get` or `iter`/`SSIterator`), bloom filters, and checksums. Keys and values are `&[u8]`.
 
@@ -62,13 +62,13 @@ The `sstable` crate provides immutable sorted string tables with `TableBuilder` 
 
 ### 4. Reuse existing `pwal` WAL for memtable durability
 
-**Decision:** Write mutations to the existing WAL (via `WalRecord::Put`/`WalRecord::Delete`) before applying to memtable. On restart, replay remaining WAL segments into the store instead of executing a full store hydration strategy. Utilize an async event-driven architecture and a graceful shutdown flush to manage WAL file rotation safely.
+**Decision:** Write mutations to the existing WAL (via `WalRecord::Put`/`WalRecord::Delete`) before applying to memtable. On restart, replay remaining WAL segments into the store instead of executing a full store hydration strategy. `SstableStore` holds a direct `Arc<dyn Wal<WalRecord>>` reference and manages WAL purge and compaction inline after each flush.
 
-**Why:** The `pwal` crate supports per-partition log streams. Because `SstableStore` insertions into memtables are idempotent based on HLC timestamps, we completely decouple the WAL truncation logic from the storage engine:
-- Upon reaching a size threshold and successfully flushing an SSTable, `SstableStore` simply emits an `SstableFlushed(PartitionId)` event via `EventBus`.
-- An event listener instructs `pwal` to truncate its log, keeping only the most recent segment files for that partition (guaranteeing we keep unflushed items that straddled a segment boundary).
+**Why:** The `pwal` crate supports per-partition log streams. Because `SstableStore` insertions into memtables are idempotent based on HLC timestamps, WAL truncation is handled directly by the store:
+- Upon reaching a size threshold and successfully flushing an SSTable, `SstableStore` directly calls `wal.purge_segments(partition, RetainLatestSegments(2))` to truncate the WAL, keeping only the most recent segment files for that partition (guaranteeing we keep unflushed items that straddled a segment boundary).
+- After WAL purge, the store evaluates whether compaction is needed and triggers it inline — no external event listener required.
 - On a crash, the node restarts and `pwal` blindly replays its remaining segment records back into the memtable. Duplicate records that were already flushed to SSTables prior to the crash are idempotently merged or overwritten safely.
-- During a graceful shutdown, a new `StoreEngine::flush_all()` method forces all memtables to flush and emit events, resulting in near-zero WAL segments remaining, allowing instant/zero-replay boot times.
+- During a graceful shutdown, `StoreEngine::shutdown()` forces all memtables to flush synchronously, resulting in near-zero WAL segments remaining, allowing instant/zero-replay boot times.
 
 ### 5. Memtable flush trigger and segment sizing
 
@@ -80,9 +80,9 @@ The `sstable` crate provides immutable sorted string tables with `TableBuilder` 
 
 ### 6. Simple size-tiered compaction for v1
 
-**Decision:** When the number of SSTable files exceeds a threshold (e.g., 8 files), merge all files into one, dropping tombstoned entries. This evaluation is triggered by the `EventBus` listener reacting to an `SstableFlushed` event.
+**Decision:** When the number of SSTable files exceeds a threshold (e.g., 8 files), merge all files into one, dropping tombstoned entries. This evaluation is triggered inline by `SstableStore` immediately after a successful flush and WAL purge.
 
-**Why:** Simplest compaction strategy. Prevents unbounded file growth while keeping implementation minimal. Tying the trigger to the `SstableFlushed` event ensures we evaluate size bounds only when they are effectively increased, preventing tight-loop checks. Can be upgraded to leveled compaction later if needed.
+**Why:** Simplest compaction strategy. Prevents unbounded file growth while keeping implementation minimal. Triggering compaction directly after flush ensures we evaluate size bounds only when they are effectively increased, preventing tight-loop checks. Keeping this logic internal to `SstableStore` (rather than routing through `EventBus`) simplifies error handling and makes the store self-contained and independently testable. Can be upgraded to leveled compaction later if needed.
 
 ### 7. Tombstone-based deletes
 

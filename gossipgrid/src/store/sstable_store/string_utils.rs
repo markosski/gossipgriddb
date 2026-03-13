@@ -51,8 +51,6 @@ pub(crate) fn unescape_key_component(component: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn foo_test() {
         let foobar = "foobar";

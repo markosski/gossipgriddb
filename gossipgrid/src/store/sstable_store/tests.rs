@@ -323,3 +323,83 @@ fn test_partition_store_reads_during_active_flush() {
 
     fs::remove_dir_all(partition_dir).unwrap();
 }
+
+#[tokio::test]
+async fn test_partition_store_compaction() {
+    use pwal::wal::WalLocalFile;
+    use std::sync::Arc;
+
+    let partition_dir = temp_partition_dir("compact");
+    let wal_dir = temp_partition_dir("wal_compact");
+    let wal: Arc<dyn pwal::Wal<crate::wal::WalRecord> + Send + Sync> = Arc::new(
+        WalLocalFile::new(wal_dir.clone(), true, 1024 * 1024)
+            .await
+            .unwrap(),
+    );
+    let store = SstableStore::new(partition_dir.clone(), wal.clone(), 10).unwrap();
+
+    let partition = PartitionId(1);
+    let pk = PartitionKey("compact-pk".to_string());
+
+    // Call insert key0
+    let key0 = StorageKey::new(pk.clone(), Some(RangeKey("key_0".to_string())));
+    store
+        .insert(&partition, &key0, test_item("val_0", ItemStatus::Active))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Wait for flush
+
+    // Remove key0 (writes tombstone)
+    store.remove(&partition, &key0).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Wait for flush
+
+    // Write 6 more small sstables (total 8 sstables)
+    for i in 1..=6 {
+        let key = StorageKey::new(pk.clone(), Some(RangeKey(format!("key_{}", i))));
+        store
+            .insert(
+                &partition,
+                &key,
+                test_item(&format!("val_{}", i), ItemStatus::Active),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Wait for flush
+    }
+
+    let sst_count = || {
+        let mut count = 0;
+        let partition_path = partition_dir.join(partition.0.to_string());
+        if let Ok(entries) = std::fs::read_dir(&partition_path) {
+            for entry in entries.flatten() {
+                if entry.path().extension().is_some_and(|ext| ext == "sst") {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+
+    // give some time to compact
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    assert_eq!(sst_count(), 1);
+
+    // Verify that key_0 is not present (tombstoned and dropped during compaction)
+    let entry0 = store.get(&partition, &key0).await.unwrap();
+    assert!(entry0.is_none());
+
+    // Verify key_1 is present
+    let key1 = StorageKey::new(pk.clone(), Some(RangeKey("key_1".to_string())));
+    let entry1 = store.get(&partition, &key1).await.unwrap().unwrap();
+    assert_eq!(entry1.item.message, b"val_1".to_vec());
+
+    // Verify Active Count is 6 (key_1 through key_6)
+    let counts = store.partition_counts().await.unwrap();
+    assert_eq!(counts.get(&partition).copied(), Some(6));
+
+    // verify there is only 1 sstable left
+    assert_eq!(sst_count(), 1);
+
+    fs::remove_dir_all(partition_dir).unwrap();
+}
