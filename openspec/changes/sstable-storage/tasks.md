@@ -62,7 +62,7 @@
 - [x] 9.1 Unit tests for `PartitionStore` CRUD operations (mirror existing `InMemoryStore` tests)
 - [x] 9.2 Unit tests for `get_many` ordering, filtering, skip_null_rk, and limit
 - [x] 9.3 Unit tests for flush: verify data persists after flush, memtable is cleared
-- [x] 9.4 Unit tests for compaction: verify tombstones are removed, data integrity preserved
-- [ ] 9.5 Integration test: insert items, restart `SstableStore` (simulated), verify items are recovered from SSTable files
-- [ ] 9.6 Integration test: WAL replay — insert items, simulate crash (don't flush), restart, verify recovery from WAL
-- [x] 9.7 Integration test: reads during flush — concurrent read/write during active flush
+- [x] 9.4 Component test for compaction: verify tombstones are removed, data integrity preserved
+- [x] 9.5 Component test: insert items, restart `SstableStore` (simulated), verify items are recovered from SSTable files
+- [x] 9.6 Component test: reads during flush — concurrent read/write during active flush
+- [x] 9.7 Integration test: WAL replay — insert items, simulate crash (don't flush), restart, verify recovery from WAL

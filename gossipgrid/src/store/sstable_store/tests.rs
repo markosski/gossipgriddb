@@ -403,3 +403,75 @@ async fn test_partition_store_compaction() {
 
     fs::remove_dir_all(partition_dir).unwrap();
 }
+
+// Component test: insert items, restart `SstableStore` (simulated), verify items are recovered from SSTable files
+#[tokio::test]
+async fn test_sstable_store_restart_recovery_from_sstable_files() {
+    use pwal::wal::WalLocalFile;
+    use std::sync::Arc;
+
+    let data_dir = temp_partition_dir("restart-recovery");
+    let wal_dir = temp_partition_dir("wal_restart");
+    let wal: Arc<dyn pwal::Wal<crate::wal::WalRecord> + Send + Sync> = Arc::new(
+        WalLocalFile::new(wal_dir.clone(), true, 1024 * 1024)
+            .await
+            .unwrap(),
+    );
+
+    let partition = PartitionId(42);
+    let pk = PartitionKey("restart-pk".to_string());
+
+    let key1 = StorageKey::new(pk.clone(), Some(RangeKey("item-1".to_string())));
+    let key2 = StorageKey::new(pk.clone(), Some(RangeKey("item-2".to_string())));
+    let key3 = StorageKey::new(pk.clone(), Some(RangeKey("item-3".to_string())));
+
+    // Phase 1: insert items and flush them to SSTable files via shutdown.
+    {
+        // Use a very large threshold so no automatic flush happens on insert —
+        // we rely on shutdown() to flush synchronously.
+        let store = SstableStore::new(data_dir.clone(), wal.clone(), usize::MAX).unwrap();
+
+        store
+            .insert(&partition, &key1, test_item("val-1", ItemStatus::Active))
+            .await
+            .unwrap();
+        store
+            .insert(&partition, &key2, test_item("val-2", ItemStatus::Active))
+            .await
+            .unwrap();
+        store
+            .insert(&partition, &key3, test_item("val-3", ItemStatus::Active))
+            .await
+            .unwrap();
+
+        // Graceful shutdown flushes all memtables to SSTable files synchronously.
+        store.shutdown().await.unwrap();
+    } // store is dropped here — simulates a process restart
+
+    // Phase 2: open a fresh SstableStore at the same data directory (simulated restart).
+    {
+        let store = SstableStore::new(data_dir.clone(), wal.clone(), usize::MAX).unwrap();
+
+        let entry1 = store.get(&partition, &key1).await.unwrap();
+        assert!(entry1.is_some(), "item-1 should be recovered from SSTable");
+        assert_eq!(entry1.unwrap().item.message, b"val-1".to_vec());
+
+        let entry2 = store.get(&partition, &key2).await.unwrap();
+        assert!(entry2.is_some(), "item-2 should be recovered from SSTable");
+        assert_eq!(entry2.unwrap().item.message, b"val-2".to_vec());
+
+        let entry3 = store.get(&partition, &key3).await.unwrap();
+        assert!(entry3.is_some(), "item-3 should be recovered from SSTable");
+        assert_eq!(entry3.unwrap().item.message, b"val-3".to_vec());
+
+        let counts = store.partition_counts().await.unwrap();
+        assert_eq!(
+            counts.get(&partition).copied(),
+            Some(3),
+            "active count should be 3 after restart"
+        );
+    }
+
+    fs::remove_dir_all(data_dir).unwrap();
+    fs::remove_dir_all(wal_dir).unwrap();
+}
