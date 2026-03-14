@@ -1822,7 +1822,9 @@ dependencies = [
 
 [[package]]
 name = "pwal"
-version = "0.1.0"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be17e7dbb57ca342768e44d69a974a0b3e56b76e5fb749e3376c4399102830a9"
 dependencies = [
  "async-trait",
  "bincode",
