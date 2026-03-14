@@ -48,14 +48,3 @@ pub(crate) fn unescape_key_component(component: &str) -> Option<String> {
 
     if escaped { None } else { Some(unescaped) }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn foo_test() {
-        let foobar = "foobar";
-        let foo = &foobar[..3];
-
-        assert_eq!(foo, "foo");
-    }
-}
