@@ -4,10 +4,18 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::{clock::HLC, item::ItemStatus};
+use crate::{
+    PartitionKey, RangeKey,
+    clock::HLC,
+    item::ItemStatus,
+    store::sstable_store::{
+        key_codecs::{decode_storage_key, encode_storage_key},
+        partition_store::encode_item,
+    },
+};
 
 use super::*;
-use sstable::TableBuilder;
+use sstable::{Options, TableBuilder};
 
 fn temp_partition_dir(test_name: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
