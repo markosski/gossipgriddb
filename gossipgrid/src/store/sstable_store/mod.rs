@@ -50,7 +50,11 @@ impl SstableStore {
 
         if truncate && data_dir.exists() {
             if let Err(err) = fs::remove_dir_all(&data_dir) {
-                log::warn!("Failed to delete existing data directory {:?}: {}", data_dir, err);
+                log::warn!(
+                    "Failed to delete existing data directory {:?}: {}",
+                    data_dir,
+                    err
+                );
             }
         }
 

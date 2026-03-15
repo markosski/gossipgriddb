@@ -339,6 +339,7 @@ fn test_next_node() {
         3001,
         None,
         Some(cluster_config),
+        "EPHEMERAL".to_string(),
     );
     match memory {
         NodeState::Joined(ref mut joined) => {
@@ -401,6 +402,7 @@ fn test_next_nodes() {
         3001,
         None,
         Some(cluster_config),
+        "EPHEMERAL".to_string(),
     );
     match memory {
         NodeState::Joined(ref mut joined) => {

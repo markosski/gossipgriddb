@@ -62,7 +62,7 @@ pub struct NodeBuilder {
     store: Option<Box<dyn Store + Send + Sync>>,
     is_ephemeral: bool,
     functions_path: Option<std::path::PathBuf>,
-    cluster_name: Option<String>,
+    join_cluster_name: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -88,7 +88,7 @@ impl NodeBuilder {
             store: None,
             is_ephemeral: false,
             functions_path: None,
-            cluster_name: None,
+            join_cluster_name: None,
         }
     }
 
@@ -133,10 +133,10 @@ impl NodeBuilder {
             })?);
 
         if let Some(name) = name {
-            self.cluster_name = Some(name.to_string());
+            self.join_cluster_name = Some(name.to_string());
             self.is_ephemeral = false;
         } else {
-            self.cluster_name = Some(EPHEMERAL.to_string());
+            self.join_cluster_name = Some(EPHEMERAL.to_string());
             self.is_ephemeral = true;
         }
         Ok(self)
@@ -175,7 +175,6 @@ impl NodeBuilder {
             true, // is_ephemeral
         ));
         self.is_ephemeral = true;
-        self.cluster_name = Some(EPHEMERAL.to_string());
         self
     }
 
@@ -215,10 +214,10 @@ impl NodeBuilder {
         }
 
         // Determine WAL namespace
-        let wal_namespace = if let Some(ref config) = self.cluster_config {
+        let cluster_name = if let Some(ref config) = self.cluster_config {
             config.cluster_name.clone()
         } else {
-            self.cluster_name
+            self.join_cluster_name
                 .clone()
                 .unwrap_or_else(|| EPHEMERAL.to_string())
         };
@@ -226,7 +225,7 @@ impl NodeBuilder {
         // Create WAL
         let wal: Arc<dyn Wal<WalRecord> + Send + Sync> = Arc::new(
             WalLocalFile::new(
-                crate::fs::wal_dir(&wal_namespace),
+                crate::fs::wal_dir(&cluster_name),
                 self.is_ephemeral,
                 5 * 1024 * 1024,
             )
@@ -243,7 +242,7 @@ impl NodeBuilder {
             None => {
                 #[cfg(feature = "sstable-store")]
                 {
-                    let data_dir = crate::fs::data_dir(&wal_namespace);
+                    let data_dir = crate::fs::data_dir(&cluster_name);
                     // 1MB flush threshold
                     let flush_thresh = 4 * 1024 * 1024;
                     Box::new(
@@ -276,6 +275,7 @@ impl NodeBuilder {
             web_port,
             self.join_peer,
             self.cluster_config,
+            cluster_name,
         )));
 
         // Load static functions if provided

@@ -73,6 +73,7 @@ pub struct NodeJoinRequest {
     pub node: SimpleNode,
     pub peer_address: String,
     pub node_cluster_metadata: Option<NodeClusterMetadata>,
+    pub cluster_name: String,
 }
 
 #[derive(Debug, Clone, Encode, Decode)]
@@ -191,6 +192,7 @@ async fn send_join_request(
         node: node_state.get_simple_node_as(node::SimpleNodeState::JoinedSyncing),
         peer_address: join_node.as_str().to_string(),
         node_cluster_metadata: cluster_metadata,
+        cluster_name: node_state.cluster_name.clone(),
     });
 
     if let Ok(encoded) = bincode::encode_to_vec(&msg, bincode::config::standard()) {
@@ -308,67 +310,78 @@ async fn handle_join_request(
     let cluster_updated = {
         let mut node_state = state.write().await;
         if let node::NodeState::Joined(this_node) = &mut *node_state {
-            let is_member = this_node.cluster.get_node_index(&message.node.address);
-
-            if let Some(node_id) = is_member {
+            if this_node.cluster.cluster_name != message.cluster_name {
                 warn!(
-                    "node={}; Remote node {} is already a known member, but may be re-joining",
-                    &this_node.address, &message.node.address,
+                    "node={}; Rejecting join request from {} due to cluster name mismatch. Expected: {}, Got: {}",
+                    &this_node.address,
+                    &message.node.address,
+                    this_node.cluster.cluster_name,
+                    message.cluster_name
                 );
-
-                let mut updated_node = message.node.clone();
-                updated_node.last_seen = now_millis();
-
-                let changed = this_node
-                    .cluster
-                    .assign_node(&node_id, &updated_node)
-                    .unwrap_or_default();
-                if changed {
-                    this_node.tick_hlc();
-                }
-                true
-            } else if this_node.cluster.is_fully_assigned() {
-                error!("node={}; Cluster is full, cannot join", &this_node.address);
                 false
             } else {
-                info!(
-                    "node={}; New remote node {:?} joining cluster",
-                    &this_node.address, &message.node
-                );
-                let mut updated_node = message.node.clone();
-                updated_node.last_seen = now_millis();
+                let is_member = this_node.cluster.get_node_index(&message.node.address);
 
-                if let Some(join_metadata) = message.node_cluster_metadata {
-                    if let Some(partitions) = this_node
+                if let Some(node_id) = is_member {
+                    warn!(
+                        "node={}; Remote node {} is already a known member, but may be re-joining",
+                        &this_node.address, &message.node.address,
+                    );
+
+                    let mut updated_node = message.node.clone();
+                    updated_node.last_seen = now_millis();
+
+                    let changed = this_node
                         .cluster
-                        .get_assigned_partitions(join_metadata.node_index)
-                        && partitions.iter().map(|x| x.0).collect::<Vec<_>>()
-                            == join_metadata.owned_partitions
-                    {
-                        let changed = this_node
-                            .cluster
-                            .assign_node(&join_metadata.node_index, &updated_node)
-                            .unwrap_or_default();
-                        if changed {
-                            this_node.tick_hlc();
-                        }
-                        true
-                    } else {
-                        error!(
-                            "node={}; Cannot join, metadata provided but not matching node index",
-                            &this_node.address
-                        );
-                        false
+                        .assign_node(&node_id, &updated_node)
+                        .unwrap_or_default();
+                    if changed {
+                        this_node.tick_hlc();
                     }
+                    true
+                } else if this_node.cluster.is_fully_assigned() {
+                    error!("node={}; Cluster is full, cannot join", &this_node.address);
+                    false
                 } else {
-                    // no cluster metadata provided
-                    if let Ok((_idx, changed)) = this_node.cluster.assign_next(&updated_node) {
-                        if changed {
-                            this_node.tick_hlc();
+                    info!(
+                        "node={}; New remote node {:?} joining cluster",
+                        &this_node.address, &message.node
+                    );
+                    let mut updated_node = message.node.clone();
+                    updated_node.last_seen = now_millis();
+
+                    if let Some(join_metadata) = message.node_cluster_metadata {
+                        if let Some(partitions) = this_node
+                            .cluster
+                            .get_assigned_partitions(join_metadata.node_index)
+                            && partitions.iter().map(|x| x.0).collect::<Vec<_>>()
+                                == join_metadata.owned_partitions
+                        {
+                            let changed = this_node
+                                .cluster
+                                .assign_node(&join_metadata.node_index, &updated_node)
+                                .unwrap_or_default();
+                            if changed {
+                                this_node.tick_hlc();
+                            }
+                            true
+                        } else {
+                            error!(
+                                "node={}; Cannot join, metadata provided but not matching node index",
+                                &this_node.address
+                            );
+                            false
                         }
-                        true
                     } else {
-                        false
+                        // no cluster metadata provided
+                        if let Ok((_idx, changed)) = this_node.cluster.assign_next(&updated_node) {
+                            if changed {
+                                this_node.tick_hlc();
+                            }
+                            true
+                        } else {
+                            false
+                        }
                     }
                 }
             }

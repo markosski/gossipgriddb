@@ -20,7 +20,7 @@ pub fn node_cli() -> Command {
         .disable_help_flag(true)
         .subcommand(
             Command::new("create")
-                .about("Create a new cluster")
+                .about("Create a new named cluster")
                 .arg(
                     clap::Arg::new("name")
                         .long("name")
@@ -57,7 +57,9 @@ pub fn node_cli() -> Command {
                     clap::Arg::new("name")
                         .long("name")
                         .value_name("NAME")
-                        .help("Name of the cluster to start")
+                        .help(
+                            "Name of the existing cluster config to start or skip to use ephemeral cluster",
+                        )
                         .required(false),
                 )
                 .arg(
@@ -67,7 +69,7 @@ pub fn node_cli() -> Command {
                         .value_name("SIZE")
                         .help("Size of the cluster")
                         .conflicts_with("name")
-                        .required(false),
+                        .required_unless_present("name"),
                 )
                 .arg(
                     clap::Arg::new("partition-size")
@@ -76,7 +78,7 @@ pub fn node_cli() -> Command {
                         .value_name("PARTITION_SIZE")
                         .help("Number of partitions")
                         .conflicts_with("name")
-                        .required(false),
+                        .required_unless_present("name"),
                 )
                 .arg(
                     clap::Arg::new("replication-factor")
@@ -85,7 +87,7 @@ pub fn node_cli() -> Command {
                         .value_name("REPLICATION_FACTOR")
                         .help("Replication factor")
                         .conflicts_with("name")
-                        .required(false),
+                        .required_unless_present("name"),
                 )
                 .arg(
                     clap::Arg::new("host")
@@ -117,7 +119,7 @@ pub fn node_cli() -> Command {
                     clap::Arg::new("name")
                         .long("name")
                         .value_name("NAME")
-                        .help("Name of the cluster to join")
+                        .help("Name of the cluster to join or skip to default to ephemeral cluster")
                         .required(false),
                 )
                 .arg(

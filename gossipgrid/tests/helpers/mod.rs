@@ -118,6 +118,7 @@ pub async fn start_test_cluster_with_env(
         web_port,
         None,
         Some(cluster_config),
+        "test_cluser".to_string(),
     )));
 
     let node_memory_2 = Arc::new(RwLock::new(NodeState::init(
@@ -125,6 +126,7 @@ pub async fn start_test_cluster_with_env(
         web_port_2,
         Some(local_addr.clone()),
         None,
+        "test_cluser".to_string(),
     )));
 
     let node_memory_3 = Arc::new(RwLock::new(NodeState::init(
@@ -132,6 +134,7 @@ pub async fn start_test_cluster_with_env(
         web_port_3,
         Some(local_addr.clone()),
         None,
+        "test_cluser".to_string(),
     )));
 
     let node_1 = node::start_node(local_addr, web_port, node_memory_1.clone(), env1.clone()).await;
