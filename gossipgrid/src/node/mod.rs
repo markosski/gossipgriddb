@@ -82,7 +82,23 @@ impl NodeRuntime {
     pub async fn run_until_shutdown(self) -> Result<(), NodeError> {
         let abort_handle = self.abort_handle();
         tokio::spawn(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            #[cfg(unix)]
+            {
+                // SIGTERM
+                let mut term =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .unwrap();
+                // SIGINT
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // SIGINT
+                let _ = tokio::signal::ctrl_c().await;
+            }
             abort_handle.abort();
         });
         self.wait().await
@@ -293,7 +309,7 @@ pub async fn start_node(
     .await;
     let bus = env.get_event_bus();
     // If this is a new node, we need to start the in memory hydration process if applicable
-    bus.emit(Event::StartInMemoryHydration);
+    bus.emit(Event::StartMemtableHydration);
 
     let runtime_handle = tokio::spawn(async move {
         // Ensure the blocking shutdown guard lives as long as this task
@@ -310,6 +326,12 @@ pub async fn start_node(
             event_loop
         )
         .map_err(|e| NodeError::ErrorStartingNode(format!("Node  failed: {e}")))?;
+
+        let store = env.get_store();
+        store
+            .shutdown()
+            .await
+            .map_err(|e| NodeError::GeneralError(format!("Store shutdown failed: {e}")))?;
 
         Ok(())
     });

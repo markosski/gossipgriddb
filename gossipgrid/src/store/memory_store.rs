@@ -24,10 +24,6 @@ impl Default for InMemoryStore {
 
 #[async_trait::async_trait]
 impl StoreEngine for InMemoryStore {
-    fn is_in_memory_store(&self) -> bool {
-        true
-    }
-
     async fn get(
         &self,
         partition_id: &PartitionId,
@@ -178,6 +174,10 @@ impl StoreEngine for InMemoryStore {
             result.insert(*entry.key(), *entry.value());
         }
         Ok(result)
+    }
+
+    async fn shutdown(&self) -> Result<(), DataStoreError> {
+        Ok(())
     }
 }
 

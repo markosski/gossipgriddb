@@ -14,6 +14,8 @@
 
 #[cfg(feature = "memory-store")]
 pub mod memory_store;
+#[cfg(feature = "sstable-store")]
+pub mod sstable_store;
 
 use std::{collections::HashMap, str::FromStr};
 
@@ -108,9 +110,6 @@ impl Default for GetManyOptions {
 
 #[async_trait::async_trait]
 pub trait StoreEngine: Send + Sync {
-    /// Is this purely in-memory implementation?
-    fn is_in_memory_store(&self) -> bool;
-
     /// Get item by key and range_key
     async fn get(
         &self,
@@ -144,6 +143,8 @@ pub trait StoreEngine: Send + Sync {
     /// Get counts of items per partition
     /// Counts should exclude deleted items
     async fn partition_counts(&self) -> Result<HashMap<PartitionId, usize>, DataStoreError>;
+
+    async fn shutdown(&self) -> Result<(), DataStoreError>;
 }
 
 #[async_trait::async_trait]
