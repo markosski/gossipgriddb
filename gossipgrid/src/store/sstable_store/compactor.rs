@@ -6,7 +6,7 @@ use crate::{
         DataStoreError,
         sstable_store::{
             SST_EXTENSION,
-            partition_store::{read_all_sstable_entries, MAX_SSTABLE_SEGMENTS},
+            partition_store::{MAX_SSTABLE_SEGMENTS, read_all_sstable_entries},
         },
     },
 };
