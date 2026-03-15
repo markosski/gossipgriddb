@@ -344,7 +344,7 @@ async fn test_partition_store_compaction() {
             .await
             .unwrap(),
     );
-    let store = SstableStore::new(partition_dir.clone(), wal.clone(), 10).unwrap();
+    let store = SstableStore::new(partition_dir.clone(), wal.clone(), 10, false).unwrap();
 
     let partition = PartitionId(1);
     let pk = PartitionKey("compact-pk".to_string());
@@ -437,7 +437,7 @@ async fn test_sstable_store_restart_recovery_from_sstable_files() {
     {
         // Use a very large threshold so no automatic flush happens on insert —
         // we rely on shutdown() to flush synchronously.
-        let store = SstableStore::new(data_dir.clone(), wal.clone(), usize::MAX).unwrap();
+        let store = SstableStore::new(data_dir.clone(), wal.clone(), usize::MAX, false).unwrap();
 
         store
             .insert(&partition, &key1, test_item("val-1", ItemStatus::Active))
@@ -458,7 +458,7 @@ async fn test_sstable_store_restart_recovery_from_sstable_files() {
 
     // Phase 2: open a fresh SstableStore at the same data directory (simulated restart).
     {
-        let store = SstableStore::new(data_dir.clone(), wal.clone(), usize::MAX).unwrap();
+        let store = SstableStore::new(data_dir.clone(), wal.clone(), usize::MAX, false).unwrap();
 
         let entry1 = store.get(&partition, &key1).await.unwrap();
         assert!(entry1.is_some(), "item-1 should be recovered from SSTable");

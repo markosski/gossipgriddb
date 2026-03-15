@@ -251,6 +251,7 @@ impl NodeBuilder {
                             data_dir,
                             wal.clone(),
                             flush_thresh,
+                            self.is_ephemeral,
                         )
                         .map_err(|e| {
                             NodeError::ConfigurationError(format!(

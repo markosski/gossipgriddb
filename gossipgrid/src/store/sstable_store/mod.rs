@@ -44,8 +44,15 @@ impl SstableStore {
         data_dir: PathBuf,
         wal: Arc<dyn Wal<WalRecord>>,
         flush_threshold_bytes: usize,
+        truncate: bool,
     ) -> Result<Self, DataStoreError> {
         let partitions = DashMap::new();
+
+        if truncate && data_dir.exists() {
+            if let Err(err) = fs::remove_dir_all(&data_dir) {
+                log::warn!("Failed to delete existing data directory {:?}: {}", data_dir, err);
+            }
+        }
 
         if data_dir.exists() {
             for entry in fs::read_dir(&data_dir).map_err(|err| {
