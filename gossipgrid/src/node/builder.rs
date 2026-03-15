@@ -276,6 +276,7 @@ impl NodeBuilder {
             web_port,
             self.join_peer,
             self.cluster_config,
+            wal_namespace,
         )));
 
         // Load static functions if provided

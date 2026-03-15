@@ -46,6 +46,7 @@ pub struct PreJoinNode {
     pub web_port: u16,
     pub peer_node: NodeAddress,
     pub cluster: Option<Cluster>,
+    pub cluster_name: String,
     pub node_hlc: HLC,
 }
 
@@ -110,6 +111,7 @@ impl NodeState {
         local_web_port: u16,
         seed_peer: Option<NodeAddress>,
         cluster_config: Option<cluster::Cluster>,
+        cluster_name: String,
     ) -> NodeState {
         match (cluster_config, seed_peer) {
             (Some(cluster_config), None) => {
@@ -158,6 +160,7 @@ impl NodeState {
                     web_port: local_web_port,
                     peer_node: seed_peer,
                     cluster: cluster_config,
+                    cluster_name,
                     node_hlc: HLC {
                         timestamp: 0, // Initialize HLC with zero timestamp otherwise new node will be seen as source of truth for cluster state
                         counter: 0,
