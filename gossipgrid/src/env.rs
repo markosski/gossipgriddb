@@ -1,5 +1,7 @@
 use reqwest::Client;
 
+use std::sync::Arc;
+
 use crate::{
     event_bus::EventBus, function_registry::FunctionRegistry, store::Store, wal::WalRecord,
 };
@@ -7,7 +9,7 @@ use pwal::Wal;
 
 pub struct Env {
     pub store: Box<dyn Store + Send + Sync>,
-    pub wal: Box<dyn Wal<WalRecord> + Send + Sync>,
+    pub wal: Arc<dyn Wal<WalRecord> + Send + Sync>,
     pub event_bus: EventBus,
     pub http_client: Client,
     pub function_registry: FunctionRegistry,
@@ -16,7 +18,7 @@ pub struct Env {
 impl Env {
     pub fn new(
         store: Box<dyn Store + Send + Sync>,
-        wal: Box<dyn Wal<WalRecord> + Send + Sync>,
+        wal: Arc<dyn Wal<WalRecord> + Send + Sync>,
         event_bus: EventBus,
     ) -> Self {
         Env {

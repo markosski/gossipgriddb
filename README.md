@@ -18,12 +18,12 @@ GossipGridDB is a distributed Key-Value (KV) database designed for high availabi
 - [x] **Durability**: Write-Ahead Log (WAL) ensures data is not lost on crash
 - [x] **Partitioning**: Efficient data distribution for horizontal scaling
 - [x] **Rich Querying**: Support for partition and range keys
-- [x] **Pluggable Storage**: Interfaces for custom storage backends (In-memory provided)
+- [x] **Pluggable Storage**: Interfaces for custom storage backends, In-Memory and SSTable provided
 - [x] **Compute**: Execute Lua scripts on items within partition key range for server-side calculations
 - [x] **Partition-Aware Client**: Direct routing to the correct node for lower latency
 - [x] **Batch Writes**: Enhanced throughput for write-heavy workloads
 - [ ] **Embeddable**: Easily integrate into your Rust application
-- [ ] **Cluster Resizing**: Increase throughput without downtime
+- [ ] **Cluster Resizing**: Scale capacity and throughput without downtime
 
 ## 🏗️ Architecture
 
@@ -126,3 +126,6 @@ cargo doc --no-deps --package gossipgrid --open
 
 ## 📄 License
 Licensed under [Apache-2.0](http://www.apache.org/licenses/LICENSE-2.0).
+
+## Disclaimer
+This project is built with the help of AI, not by AI.

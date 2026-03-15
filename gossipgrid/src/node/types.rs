@@ -18,6 +18,8 @@ pub enum NodeError {
     NodePersistenceError(String),
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
+    #[error("Error: {0}")]
+    GeneralError(String),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Encode, Decode, Serialize, Deserialize)]

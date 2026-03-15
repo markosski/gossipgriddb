@@ -59,6 +59,9 @@ pub use node::{AbortHandle, NodeAddress, NodeBuilder, NodeError, NodeRuntime};
 pub use store::memory_store::InMemoryStore;
 pub use store::{DataStoreError, PartitionKey, RangeKey, StorageKey, Store, StoreEngine};
 
+#[cfg(feature = "sstable-store")]
+pub use store::sstable_store::SstableStore;
+
 /// Unified error type for GossipGrid operations.
 ///
 /// This enum wraps all public error types for easier error handling with the `?` operator.

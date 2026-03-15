@@ -37,7 +37,8 @@ use crate::cluster::Cluster;
 use crate::env::Env;
 use crate::event_bus::EventBus;
 use crate::store::Store;
-use crate::store::memory_store::InMemoryStore;
+use crate::wal::WalRecord;
+use pwal::Wal;
 use pwal::wal::WalLocalFile;
 
 use super::address::NodeAddress;
@@ -213,11 +214,6 @@ impl NodeBuilder {
             ));
         }
 
-        // Create store (default to InMemoryStore)
-        let store: Box<dyn Store + Send + Sync> = self
-            .store
-            .unwrap_or_else(|| Box::new(InMemoryStore::default()));
-
         // Determine WAL namespace
         let wal_namespace = if self.is_ephemeral {
             EPHEMERAL.to_string()
@@ -228,17 +224,50 @@ impl NodeBuilder {
         };
 
         // Create WAL
-        let wal = WalLocalFile::new(
-            crate::fs::wal_dir(&wal_namespace),
-            self.is_ephemeral,
-            64 * 1024 * 1024,
-        )
-        .await
-        .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?;
+        let wal: Arc<dyn Wal<WalRecord> + Send + Sync> = Arc::new(
+            WalLocalFile::new(
+                crate::fs::wal_dir(&wal_namespace),
+                self.is_ephemeral,
+                5 * 1024 * 1024,
+            )
+            .await
+            .map_err(|e| NodeError::ConfigurationError(format!("Failed to create WAL: {e}")))?,
+        );
 
-        // Create EventBus and Env
+        // Create EventBus
         let bus = EventBus::new();
-        let env: Arc<Env> = Arc::new(Env::new(store, Box::new(wal), bus));
+
+        // Create store (default to SstableStore if feature enabled)
+        let store: Box<dyn Store + Send + Sync> = match self.store {
+            Some(store) => store,
+            None => {
+                #[cfg(feature = "sstable-store")]
+                {
+                    let data_dir = crate::fs::data_dir(&wal_namespace);
+                    // 1MB flush threshold
+                    let flush_thresh = 4 * 1024 * 1024;
+                    Box::new(
+                        crate::store::sstable_store::SstableStore::new(
+                            data_dir,
+                            wal.clone(),
+                            flush_thresh,
+                        )
+                        .map_err(|e| {
+                            NodeError::ConfigurationError(format!(
+                                "Failed to create SstableStore: {e}"
+                            ))
+                        })?,
+                    )
+                }
+                #[cfg(not(feature = "sstable-store"))]
+                {
+                    Box::new(crate::store::memory_store::InMemoryStore::default())
+                }
+            }
+        };
+
+        // Create Env
+        let env: Arc<Env> = Arc::new(Env::new(store, wal, bus));
 
         // Create NodeState
         let node_state = Arc::new(RwLock::new(NodeState::init(

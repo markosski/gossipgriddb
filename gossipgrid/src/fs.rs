@@ -5,6 +5,7 @@ use std::path::PathBuf;
 const DEFAULT_DIR: &str = ".gossipgrid";
 const CLUSTERS_DIR: &str = "clusters";
 const WAL_DIR: &str = "wal";
+const DATA_DIR: &str = "data";
 
 fn app_root() -> PathBuf {
     let base_dir_override = std::env::var("GOSSIPGRID_BASE_DIR");
@@ -31,6 +32,10 @@ pub fn ensure_clusters_dir(name: &str) -> Result<PathBuf, io::Error> {
 
 pub fn wal_dir(cluster_name: &str) -> PathBuf {
     clusters_dir().join(cluster_name).join(WAL_DIR)
+}
+
+pub fn data_dir(cluster_name: &str) -> PathBuf {
+    clusters_dir().join(cluster_name).join(DATA_DIR)
 }
 
 pub fn cluster_metadata_path(cluster_name: &str) -> PathBuf {
