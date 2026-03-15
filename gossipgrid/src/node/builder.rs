@@ -62,6 +62,7 @@ pub struct NodeBuilder {
     store: Option<Box<dyn Store + Send + Sync>>,
     is_ephemeral: bool,
     functions_path: Option<std::path::PathBuf>,
+    cluster_name: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -87,6 +88,7 @@ impl NodeBuilder {
             store: None,
             is_ephemeral: false,
             functions_path: None,
+            cluster_name: None,
         }
     }
 
@@ -118,28 +120,25 @@ impl NodeBuilder {
         self
     }
 
-    /// Set a peer address to join an existing cluster.
+    /// Set a peer address and optional cluster name to join an existing cluster.
     ///
     /// When set, this node will attempt to join the cluster by contacting
-    /// the specified peer during startup.
-    pub fn join_peer(mut self, addr: &str) -> Result<Self, NodeError> {
+    /// the specified peer during startup. Providing a cluster name ensures
+    /// the correct WAL and data directories are used even before discovery.
+    /// If no name is provided, the node joins as an ephemeral node.
+    pub fn join(mut self, addr: &str, name: Option<&str>) -> Result<Self, NodeError> {
         self.join_peer =
             Some(addr.try_into().map_err(|e| {
                 NodeError::ConfigurationError(format!("Invalid peer address: {e}"))
             })?);
-        Ok(self)
-    }
 
-    /// Set a peer address to join an ephemeral cluster.
-    ///
-    /// Use this when joining a cluster that was started with `.ephemeral()`.
-    /// This ensures WAL truncation and proper ephemeral mode handling.
-    pub fn join_ephemeral(mut self, addr: &str) -> Result<Self, NodeError> {
-        self.join_peer =
-            Some(addr.try_into().map_err(|e| {
-                NodeError::ConfigurationError(format!("Invalid peer address: {e}"))
-            })?);
-        self.is_ephemeral = true;
+        if let Some(name) = name {
+            self.cluster_name = Some(name.to_string());
+            self.is_ephemeral = false;
+        } else {
+            self.cluster_name = Some(EPHEMERAL.to_string());
+            self.is_ephemeral = true;
+        }
         Ok(self)
     }
 
@@ -176,6 +175,7 @@ impl NodeBuilder {
             true, // is_ephemeral
         ));
         self.is_ephemeral = true;
+        self.cluster_name = Some(EPHEMERAL.to_string());
         self
     }
 
@@ -215,12 +215,12 @@ impl NodeBuilder {
         }
 
         // Determine WAL namespace
-        let wal_namespace = if self.is_ephemeral {
-            EPHEMERAL.to_string()
-        } else if let Some(ref config) = self.cluster_config {
+        let wal_namespace = if let Some(ref config) = self.cluster_config {
             config.cluster_name.clone()
         } else {
-            EPHEMERAL.to_string()
+            self.cluster_name
+                .clone()
+                .unwrap_or_else(|| EPHEMERAL.to_string())
         };
 
         // Create WAL

@@ -65,7 +65,6 @@ async fn main() -> Result<(), NodeError> {
         }
         Some(("start", start_matches)) => {
             let name = start_matches.get_one::<String>("name");
-            let ephemeral = start_matches.get_flag("ephemeral");
 
             let host: String = start_matches
                 .get_one::<String>("host")
@@ -85,7 +84,7 @@ async fn main() -> Result<(), NodeError> {
                 builder = builder.with_functions(functions_file.into());
             }
 
-            if ephemeral {
+            if name.is_none() {
                 let size: u8 = start_matches
                     .get_one::<String>("size")
                     .unwrap()
@@ -114,7 +113,6 @@ async fn main() -> Result<(), NodeError> {
         }
         Some(("join", sub_matches)) => {
             let name = sub_matches.get_one::<String>("name");
-            let ephemeral = sub_matches.get_flag("ephemeral");
             let peer_address = sub_matches
                 .get_one::<String>("peer-address")
                 .expect("Address is required");
@@ -136,16 +134,13 @@ async fn main() -> Result<(), NodeError> {
                 builder = builder.with_functions(functions_file.into());
             }
 
-            // Use join_ephemeral for ephemeral clusters, join_peer for persistent
-            if ephemeral {
-                builder = builder.join_ephemeral(peer_address)?;
-            } else {
-                builder = builder.join_peer(peer_address)?;
-                if let Some(name) = name
-                    && let Ok(cluster_config) = gossipgrid::cluster::Cluster::load(name)
-                {
-                    builder = builder.cluster(cluster_config);
-                }
+            // Join a persistent or ephemeral cluster
+            builder = builder.join(peer_address, name.map(|s| s.as_str()))?;
+
+            if let Some(name) = name
+                && let Ok(cluster_config) = gossipgrid::cluster::Cluster::load(name)
+            {
+                builder = builder.cluster(cluster_config);
             }
 
             let node = builder.build().await?;

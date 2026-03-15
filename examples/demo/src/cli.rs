@@ -61,20 +61,6 @@ pub fn node_cli() -> Command {
                         .required(false),
                 )
                 .arg(
-                    clap::Arg::new("ephemeral")
-                        .long("ephemeral")
-                        .required(false)
-                        .num_args(0)
-                        .help("Start an ephemeral cluster")
-                        .requires_all(["size", "partition-size", "replication-factor"]),
-                )
-                .group(
-                    clap::ArgGroup::new("identity")
-                        .args(["name", "ephemeral"])
-                        .required(true)
-                        .multiple(false),
-                )
-                .arg(
                     clap::Arg::new("size")
                         .short('s')
                         .long("size")
@@ -133,19 +119,6 @@ pub fn node_cli() -> Command {
                         .value_name("NAME")
                         .help("Name of the cluster to join")
                         .required(false),
-                )
-                .arg(
-                    clap::Arg::new("ephemeral")
-                        .long("ephemeral")
-                        .required(false)
-                        .num_args(0)
-                        .help("Join an ephemeral cluster"),
-                )
-                .group(
-                    clap::ArgGroup::new("identity")
-                        .args(["name", "ephemeral"])
-                        .required(true)
-                        .multiple(false),
                 )
                 .arg(
                     clap::Arg::new("host")
