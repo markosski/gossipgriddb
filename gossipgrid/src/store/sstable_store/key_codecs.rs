@@ -1,4 +1,4 @@
-use crate::{DataStoreError, PartitionKey, RangeKey, StorageKey, item::Item};
+use crate::{DataStoreError, PartitionKey, RangeKey, StorageKey};
 
 const KEY_SEPARATOR: char = '/';
 const KEY_SEPARATOR_BYTE: u8 = b'/';

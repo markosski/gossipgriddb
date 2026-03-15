@@ -6,7 +6,7 @@ use crate::{item::Item, store::sstable_store::partition_store::decode_item};
 
 pub(crate) struct OwningSSIterator {
     // Table is boxed so its memory address is stable
-    table: Box<Table>,
+    _table: Box<Table>,
     // We store the pointer to the iterator and cast it to have an erased lifetime.
     // This is safe because `iter` only references `table`, which is moved with us
     // and is Boxed (so it doesn't change address).
@@ -28,7 +28,7 @@ impl OwningSSIterator {
         };
 
         Self {
-            table: boxed_table,
+            _table: boxed_table,
             iter: iter_ptr,
         }
     }
@@ -140,10 +140,8 @@ mod tests {
         ];
 
         // Newer source is later in the vector
-        let iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> = vec![
-            Box::new(source1.into_iter()),
-            Box::new(source2.into_iter()),
-        ];
+        let iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> =
+            vec![Box::new(source1.into_iter()), Box::new(source2.into_iter())];
 
         let mut merge_iter = MergeIterator::new(iters);
 
@@ -176,10 +174,8 @@ mod tests {
             (b"ab".to_vec(), test_item("v2-ab")),
         ];
 
-        let iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> = vec![
-            Box::new(source1.into_iter()),
-            Box::new(source2.into_iter()),
-        ];
+        let iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> =
+            vec![Box::new(source1.into_iter()), Box::new(source2.into_iter())];
 
         let mut merge_iter = MergeIterator::new(iters);
 
@@ -203,10 +199,8 @@ mod tests {
 
     #[test]
     fn test_merge_iterator_with_empty_sources() {
-        let iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> = vec![
-            Box::new(std::iter::empty()),
-            Box::new(std::iter::empty()),
-        ];
+        let iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> =
+            vec![Box::new(std::iter::empty()), Box::new(std::iter::empty())];
         let mut merge_iter = MergeIterator::new(iters);
         assert!(merge_iter.next().is_none());
     }

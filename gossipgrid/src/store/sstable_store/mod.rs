@@ -10,7 +10,7 @@ mod partition_store;
 #[cfg(test)]
 mod tests;
 
-use crate::store::sstable_store::partition_store::write_memtable_to_sstable;
+use crate::store::sstable_store::partition_store::dump_to_sstable;
 use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
 use dashmap::DashMap;
@@ -147,7 +147,7 @@ impl SstableStore {
                 let write_res = tokio::task::spawn_blocking({
                     let memtable_arc = memtable_arc.clone();
                     let sst_path = sst_path.clone();
-                    move || write_memtable_to_sstable(&memtable_arc, &sst_path)
+                    move || dump_to_sstable(&memtable_arc, &sst_path)
                 })
                 .await
                 .unwrap_or_else(|err| {
@@ -304,7 +304,7 @@ impl StoreEngine for SstableStore {
                 let file_name = format!("{}.{}", timestamp, SST_EXTENSION);
                 let sst_path = partition_dir.join(file_name);
 
-                write_memtable_to_sstable(&memtable_arc, &sst_path)?;
+                dump_to_sstable(&memtable_arc, &sst_path)?;
 
                 let mut part = partition_store.write().await;
                 part.complete_flush(sst_path);

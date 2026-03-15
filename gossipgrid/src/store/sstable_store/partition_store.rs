@@ -316,12 +316,6 @@ impl PartitionStore {
         self.sstable_files.push(sstable_path);
     }
 
-    pub(crate) fn compact(
-        &self,
-    ) -> Result<Option<(PathBuf, Vec<PathBuf>, BTreeMap<Vec<u8>, Item>)>, DataStoreError> {
-        Compactor::compact(&self.partition_dir, &self.sstable_files)
-    }
-
     pub(crate) async fn complete_compaction(&mut self, new_path: PathBuf, old_paths: Vec<PathBuf>) {
         let old_paths_set: std::collections::HashSet<_> = old_paths.into_iter().collect();
         let mut new_files = Vec::new();
@@ -351,12 +345,12 @@ impl PartitionStore {
     }
 
     pub(crate) async fn trigger_partition_compaction(&mut self) -> Result<(), DataStoreError> {
-        let compaction_data = self.compact()?;
+        let compaction_data = Compactor::compact(&self.partition_dir, &self.sstable_files)?;
 
         if let Some((new_path, old_paths, merged)) = compaction_data {
             let write_res = tokio::task::spawn_blocking({
                 let new_path = new_path.clone();
-                move || write_memtable_to_sstable(&merged, &new_path)
+                move || dump_to_sstable(&merged, &new_path)
             })
             .await
             .unwrap_or_else(|err| {
@@ -376,7 +370,7 @@ impl PartitionStore {
     }
 }
 
-pub(crate) fn write_memtable_to_sstable(
+pub(crate) fn dump_to_sstable(
     memtable: &BTreeMap<Vec<u8>, Item>,
     path: &PathBuf,
 ) -> Result<(), DataStoreError> {

@@ -281,7 +281,7 @@ fn test_partition_store_flush_persists_data_and_clears_memtable() {
     let timestamp = crate::clock::now_millis();
     let sst_path = partition_dir.join(format!("{}.sst", timestamp));
 
-    write_memtable_to_sstable(&arc_flushing, &sst_path).unwrap();
+    dump_to_sstable(&arc_flushing, &sst_path).unwrap();
     store.complete_flush(sst_path);
 
     assert!(store.flushing_memtable.is_none());
