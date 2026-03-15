@@ -1,5 +1,8 @@
-## ADDED Requirements
+# sstable-storage Specification
 
+## Purpose
+TBD - created by archiving change sstable-storage. Update Purpose after archive.
+## Requirements
 ### Requirement: Persistent storage via SSTable engine
 The system SHALL provide a persistent disk-backed storage engine (`SstableStore`) that implements the `StoreEngine` trait, using the `sstable` crate with an LSM-tree architecture (memtable + SSTable files).
 
@@ -121,7 +124,3 @@ The system SHALL reuse the existing `pwal`-based WAL infrastructure for crash re
 - **THEN** on restart, the `SstableStore` SHALL replay the WAL from known LSN to reconstruct the memtable state
 - **AND** SSTable files on disk SHALL remain intact and usable
 
-#### Scenario: is_in_memory_store returns false
-- **WHEN** `is_in_memory_store()` is called on `SstableStore`
-- **THEN** it SHALL return `false`
-- **AND** the existing `hydrate_store_from_wal_task` SHALL skip full store hydration

@@ -62,7 +62,7 @@ The `sstable` crate provides immutable sorted string tables with `TableBuilder` 
 
 ### 4. Reuse existing `pwal` WAL for memtable durability
 
-**Decision:** Write mutations to the existing WAL (via `WalRecord::Put`/`WalRecord::Delete`) before applying to memtable. On restart, replay remaining WAL segments into the store instead of executing a full store hydration strategy. `SstableStore` holds a direct `Arc<dyn Wal<WalRecord>>` reference and manages WAL purge and compaction inline after each flush.
+**Decision:** Write mutations to the existing WAL (via `WalRecord::Put`/`WalRecord::Delete`) before applying to memtable. On restart, replay remaining WAL segments into the store. `SstableStore` holds a direct `Arc<dyn Wal<WalRecord>>` reference and manages WAL purge and compaction inline after each flush.
 
 **Why:** The `pwal` crate supports per-partition log streams. Because `SstableStore` insertions into memtables are idempotent based on HLC timestamps, WAL truncation is handled directly by the store:
 - Upon reaching a size threshold and successfully flushing an SSTable, `SstableStore` directly calls `wal.purge_segments(partition, RetainLatestSegments(2))` to truncate the WAL, keeping only the most recent segment files for that partition (guaranteeing we keep unflushed items that straddled a segment boundary).
