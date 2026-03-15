@@ -1,13 +1,9 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-    ops::Bound,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, fs, ops::Bound, path::PathBuf, sync::Arc};
+
+use sstable::SSIterator;
 
 use bincode::config;
-use sstable::{Options, SSIterator, Table, TableBuilder};
+use sstable::{Options, Table, TableBuilder};
 
 use crate::{
     clock::HLC,
@@ -16,10 +12,12 @@ use crate::{
         DataStoreError, GetManyOptions, PartitionKey, StorageKey,
         sstable_store::{
             SST_EXTENSION,
+            compactor::Compactor,
             key_codecs::{
                 decode_storage_key, encode_storage_key, encoded_partition_prefix,
                 matches_partition_key,
             },
+            merge_iterator::{MergeIterator, OwningSSIterator},
         },
     },
 };
@@ -79,6 +77,35 @@ impl PartitionStore {
             partition_dir,
             active_count: 0,
         })
+    }
+
+    pub(crate) fn load_from_dir(partition_dir: PathBuf) -> Result<Self, DataStoreError> {
+        let mut store = Self::new(partition_dir.clone())?;
+
+        let mut sst_files = Vec::new();
+        for sst_entry in fs::read_dir(&partition_dir).map_err(|err| {
+            DataStoreError::StoreOperationError(format!(
+                "failed to read partition directory `{}`: {err}",
+                partition_dir.display()
+            ))
+        })? {
+            let sst_entry = sst_entry.map_err(|err| {
+                DataStoreError::StoreOperationError(format!("failed to read file entry: {err}"))
+            })?;
+            let sst_path = sst_entry.path();
+            if sst_path.is_file() && sst_path.extension().is_some_and(|ext| ext == SST_EXTENSION) {
+                sst_files.push(sst_path);
+            }
+        }
+
+        // Sort SSTable files by filename (timestamp) oldest to newest
+        sst_files.sort();
+        store.sstable_files = sst_files;
+
+        // Recompute active count from SSTables
+        store.recompute_count()?;
+
+        Ok(store)
     }
 
     pub(crate) fn get(&self, key: &StorageKey) -> Result<Option<ItemEntry>, DataStoreError> {
@@ -191,30 +218,45 @@ impl PartitionStore {
         Ok(self.active_count)
     }
 
-    // TODO: ensure this is reasonably performant
+    // TODO: Right now we are re-calculating sst files on each start.
+    //  in the future we may consider persisting counts per sstable when materializing memtable.
     pub(crate) fn recompute_count(&mut self) -> Result<(), DataStoreError> {
-        let mut merged = HashMap::new();
+        let mut iters: Vec<Box<dyn Iterator<Item = (Vec<u8>, Item)>>> = Vec::new();
 
+        // 1. Add SSTable iterators (oldest tracking first)
         for path in &self.sstable_files {
-            for (encoded_key, item) in read_all_sstable_entries(path)? {
-                merged.insert(encoded_key, item);
-            }
+            let table = open_table(path)?;
+            let owning_iter = OwningSSIterator::new(table);
+            iters.push(Box::new(owning_iter));
         }
 
+        // 2. Add flushing memtable iterator
         if let Some(flushing) = &self.flushing_memtable {
-            for (encoded_key, item) in flushing.iter() {
-                merged.insert(encoded_key.clone(), item.clone());
+            let entries: Vec<_> = flushing
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            iters.push(Box::new(entries.into_iter()));
+        }
+
+        // 3. Add active memtable iterator
+        let entries: Vec<_> = self
+            .memtable
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        iters.push(Box::new(entries.into_iter()));
+
+        let mut active_count = 0;
+        let merge_iter = MergeIterator::new(iters);
+
+        for (_, item) in merge_iter {
+            if item.status == ItemStatus::Active {
+                active_count += 1;
             }
         }
 
-        for (encoded_key, item) in &self.memtable {
-            merged.insert(encoded_key.clone(), item.clone());
-        }
-
-        self.active_count = merged
-            .values()
-            .filter(|item| item.status == ItemStatus::Active)
-            .count();
+        self.active_count = active_count;
         Ok(())
     }
 
@@ -277,31 +319,10 @@ impl PartitionStore {
     pub(crate) fn compact(
         &self,
     ) -> Result<Option<(PathBuf, Vec<PathBuf>, BTreeMap<Vec<u8>, Item>)>, DataStoreError> {
-        if self.sstable_files.len() < MAX_SSTABLE_SEGMENTS {
-            return Ok(None);
-        }
-
-        let files_to_compact = self.sstable_files.clone();
-        let mut merged = BTreeMap::new();
-
-        for path in &files_to_compact {
-            for (encoded_key, item) in read_all_sstable_entries(path)? {
-                merged.insert(encoded_key, item);
-            }
-        }
-
-        // Drop tombstones
-        merged.retain(|_, item| item.status == ItemStatus::Active);
-
-        let timestamp = crate::clock::now_millis();
-        let new_sst_path = self
-            .partition_dir
-            .join(format!("{}.compact.{}", timestamp, SST_EXTENSION));
-
-        Ok(Some((new_sst_path, files_to_compact, merged)))
+        Compactor::compact(&self.partition_dir, &self.sstable_files)
     }
 
-    pub(crate) fn complete_compaction(&mut self, new_path: PathBuf, old_paths: Vec<PathBuf>) {
+    pub(crate) async fn complete_compaction(&mut self, new_path: PathBuf, old_paths: Vec<PathBuf>) {
         let old_paths_set: std::collections::HashSet<_> = old_paths.into_iter().collect();
         let mut new_files = Vec::new();
 
@@ -314,16 +335,19 @@ impl PartitionStore {
         new_files.sort();
         self.sstable_files = new_files;
 
-        // Delete old files
-        for path in old_paths_set {
-            if let Err(e) = fs::remove_file(&path) {
-                log::error!(
-                    "Failed to remove compacted SSTable file {}: {:?}",
-                    path.display(),
-                    e
-                );
+        // Delete old files in a blocking task
+        let _ = tokio::task::spawn_blocking(move || {
+            for path in old_paths_set {
+                if let Err(e) = fs::remove_file(&path) {
+                    log::error!(
+                        "Failed to remove compacted SSTable file {}: {:?}",
+                        path.display(),
+                        e
+                    );
+                }
             }
-        }
+        })
+        .await;
     }
 
     pub(crate) async fn trigger_partition_compaction(&mut self) -> Result<(), DataStoreError> {
@@ -342,7 +366,7 @@ impl PartitionStore {
             });
 
             if write_res.is_ok() {
-                self.complete_compaction(new_path, old_paths);
+                self.complete_compaction(new_path, old_paths).await;
             } else {
                 log::error!("Failed to write compacted SSTable to {:?}", new_path);
             }

@@ -2,7 +2,9 @@
 //!
 //! This module is feature-gated behind `sstable-store`.
 
+mod compactor;
 mod key_codecs;
+mod merge_iterator;
 mod partition_store;
 
 #[cfg(test)]
@@ -63,35 +65,7 @@ impl SstableStore {
                     if let Some(partition_id_str) = path.file_name().and_then(|s| s.to_str()) {
                         if let Ok(pid_val) = partition_id_str.parse::<u16>() {
                             let partition_id = PartitionId(pid_val);
-                            let mut partition_store = PartitionStore::new(path.clone())?;
-
-                            // Scan for .sst files in the partition directory
-                            let mut sst_files = Vec::new();
-                            for sst_entry in fs::read_dir(&path).map_err(|err| {
-                                DataStoreError::StoreOperationError(format!(
-                                    "failed to read partition directory `{}`: {err}",
-                                    path.display()
-                                ))
-                            })? {
-                                let sst_entry = sst_entry.map_err(|err| {
-                                    DataStoreError::StoreOperationError(format!(
-                                        "failed to read file entry: {err}"
-                                    ))
-                                })?;
-                                let sst_path = sst_entry.path();
-                                if sst_path.is_file()
-                                    && sst_path.extension().is_some_and(|ext| ext == SST_EXTENSION)
-                                {
-                                    sst_files.push(sst_path);
-                                }
-                            }
-
-                            // Sort SSTable files by filename (timestamp) oldest to newest
-                            sst_files.sort();
-                            partition_store.sstable_files = sst_files;
-
-                            // Recompute active count from SSTables
-                            partition_store.recompute_count()?;
+                            let partition_store = PartitionStore::load_from_dir(path.clone())?;
 
                             partitions.insert(partition_id, Arc::new(RwLock::new(partition_store)));
                         }
