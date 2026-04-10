@@ -139,8 +139,11 @@ pub async fn client_send_sync_request_task(
     env: Arc<Env>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
 ) {
+    // Cache of connections to other nodes
     let connection_cache = Arc::new(Mutex::new(HashMap::<NodeAddress, TcpStream>::new()));
+    // This is a set of nodes that are currently being synced with
     let active_sync_nodes = Arc::new(Mutex::new(HashSet::<NodeAddress>::new()));
+    // This is a map of nodes that have failed to sync with and the time of the last failure
     let last_failure_log_time = Arc::new(DashMap::<NodeAddress, u64>::new());
 
     loop {

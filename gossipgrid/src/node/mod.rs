@@ -162,6 +162,15 @@ pub async fn start_node(
         &local_addr
     );
 
+    // Figure if single node cluster
+    let state = node_state.read().await;
+    let is_single_node = if let NodeState::Joined(this_node) = &*state {
+        this_node.cluster.cluster_size == 1
+    } else {
+        false
+    };
+    drop(state);
+
     // Print cluster configuration if available
     {
         let state = node_state.read().await;
@@ -216,44 +225,54 @@ pub async fn start_node(
         tx: blocking_shutdown_tx,
     };
 
-    tokio::task::spawn_blocking(move || {
-        // This call blocks and internally uses manual_poll in a loop, otherwise we cannot cleanly interrupts this process
-        loop {
-            socket.manual_poll(std::time::Instant::now());
-            if blocking_shutdown_rx.try_recv().is_ok() {
-                break;
+    if !is_single_node {
+        tokio::task::spawn_blocking(move || {
+            // This call blocks and internally uses manual_poll in a loop, otherwise we cannot cleanly interrupts this process
+            loop {
+                socket.manual_poll(std::time::Instant::now());
+                if blocking_shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
             }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    });
+        });
 
-    tokio::task::spawn_blocking(move || {
-        // After start_polling, we can drain events and forward them
-        while let Ok(evt) = receiver.recv() {
-            if udp_send.blocking_send(evt).is_err() {
-                break;
+        tokio::task::spawn_blocking(move || {
+            // After start_polling, we can drain events and forward them
+            while let Ok(evt) = receiver.recv() {
+                if udp_send.blocking_send(evt).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
 
     // Start Gossip send message process
-    let gossip_sending = tokio::spawn(send_membership_gossip_task(
-        node_address.clone(),
-        sender.clone(),
-        node_state.clone(),
-        env.clone(),
-        shutdown_receiver.resubscribe(),
-    ));
+    let gossip_sending = if !is_single_node {
+        tokio::spawn(send_membership_gossip_task(
+            node_address.clone(),
+            sender.clone(),
+            node_state.clone(),
+            env.clone(),
+            shutdown_receiver.resubscribe(),
+        ))
+    } else {
+        tokio::spawn(async {})
+    };
 
     // Start Gossip receive message process
-    let gossip_receiving = tokio::spawn(handle_messages_task(
-        node_address.clone(),
-        udp_receive,
-        sender.clone(),
-        node_state.clone(),
-        env.clone(),
-        shutdown_receiver.resubscribe(),
-    ));
+    let gossip_receiving = if !is_single_node {
+        tokio::spawn(handle_messages_task(
+            node_address.clone(),
+            udp_receive,
+            sender.clone(),
+            node_state.clone(),
+            env.clone(),
+            shutdown_receiver.resubscribe(),
+        ))
+    } else {
+        tokio::spawn(async {})
+    };
 
     // Start Web server process
     let web_server = tokio::spawn(web::web_server_task(
@@ -263,29 +282,38 @@ pub async fn start_node(
         shutdown_receiver.resubscribe(),
     ));
 
-    // Start Sync server process - bind listener first so errors propagate
-    let sync_listener = tokio::net::TcpListener::bind(node_address.as_str())
-        .await
-        .map_err(|e| {
-            NodeError::ErrorStartingNode(format!(
-                "Failed to bind TCP sync server on {node_address}: {e}"
-            ))
-        })?;
-    let sync_server = tokio::spawn(sync::server_sync_handler_task(
-        node_address.clone(),
-        sync_listener,
-        node_state.clone(),
-        env.clone(),
-        shutdown_receiver.resubscribe(),
-    ));
+    let sync_server = if !is_single_node {
+        // Start Sync server process - bind listener first so errors propagate
+        let sync_listener = tokio::net::TcpListener::bind(node_address.as_str())
+            .await
+            .map_err(|e| {
+                NodeError::ErrorStartingNode(format!(
+                    "Failed to bind TCP sync server on {node_address}: {e}"
+                ))
+            })?;
+
+        tokio::spawn(sync::server_sync_handler_task(
+            node_address.clone(),
+            sync_listener,
+            node_state.clone(),
+            env.clone(),
+            shutdown_receiver.resubscribe(),
+        ))
+    } else {
+        tokio::spawn(async {})
+    };
 
     // Start Sync client process
-    let sync_client = tokio::spawn(sync::client_send_sync_request_task(
-        node_address.clone(),
-        node_state.clone(),
-        env.clone(),
-        shutdown_receiver.resubscribe(),
-    ));
+    let sync_client = if !is_single_node {
+        tokio::spawn(sync::client_send_sync_request_task(
+            node_address.clone(),
+            node_state.clone(),
+            env.clone(),
+            shutdown_receiver.resubscribe(),
+        ))
+    } else {
+        tokio::spawn(async {})
+    };
 
     // Start WAL flusher
     let flush_wal = tokio::spawn(wal_flush(
