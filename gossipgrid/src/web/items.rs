@@ -313,7 +313,10 @@ async fn wait_for_sync(
 
                 let node_address = state.get_address().clone();
                 if replicas.is_empty() {
-                    warn!("node={node_address}; No replicas available to wait for sync");
+                    if node.cluster.cluster_size > 1 {
+                        warn!("node={node_address}; No replicas available to wait for sync");
+                    }
+
                     confirmed_lsn.lock().await.insert(partition, target_lsn);
                     continue;
                 }
